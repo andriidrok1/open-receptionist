@@ -6,11 +6,11 @@
 
 """hotel-voice-agent — Голосовий ІІ-ресепшн для готелю (українською).
 
-Фаза 1: локальна голосова петля (cascade pipeline)
-    мікрофон → Deepgram STT (uk) → OpenAI → ElevenLabs TTS (uk) → динамік
+Фаза 1: локальна голосова петля (cascade pipeline), увесь стек на OpenAI
+    мікрофон → OpenAI Realtime STT (uk) → OpenAI LLM → OpenAI TTS (uk) → динамік
 
 «Детекція» мовлення (коли гість почав/закінчив говорити, і перебивання) робить
-Silero VAD, вшитий у user_aggregator нижче.
+серверний VAD усередині OpenAI Realtime STT (turn_detection=None).
 
 Запуск:
     uv run bot.py         # або: python bot.py
@@ -25,21 +25,17 @@ from dotenv import load_dotenv
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-)
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
-from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai.stt import OpenAIRealtimeSTTService
+from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
@@ -154,37 +150,34 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     logger.info("Starting hotel receptionist bot (uk)")
     pms.init_db()
 
-    # --- Speech-to-Text: Deepgram Nova-3, українська ---
-    # numerals=True — правильно розпізнає числа/дати (критично для бронювань).
-    # smart_format/punctuate — чистіший текст для LLM.
-    stt = DeepgramSTTService(
-        api_key=os.getenv("DEEPGRAM_API_KEY"),
-        settings=DeepgramSTTService.Settings(
-            model="nova-3",
-            language="uk",
-            smart_format=True,
-            punctuate=True,
-            numerals=True,
-            interim_results=True,
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    # --- Speech-to-Text: OpenAI Realtime STT, українська ---
+    # turn_detection=None → серверний VAD: OpenAI сам визначає, коли гість
+    # почав/замовк, і сам обробляє перебивання. Тому окремий Silero VAD не потрібен.
+    # noise_reduction="far_field" — під телефонну/кімнатну акустику.
+    stt = OpenAIRealtimeSTTService(
+        api_key=api_key,
+        turn_detection=None,
+        settings=OpenAIRealtimeSTTService.Settings(
+            model=os.getenv("OPENAI_STT_MODEL", "gpt-realtime-whisper"),
+            language=Language.UK,
+            noise_reduction="far_field",
         ),
     )
 
-    # --- Text-to-Speech: ElevenLabs Flash v2.5, українська ---
-    # Flash v2.5 — низька затримка (<75 мс) + українська мова.
-    # ELEVENLABS_VOICE_ID візьми з бібліотеки голосів ElevenLabs
-    # (краще мультимовний або український голос).
-    tts = ElevenLabsTTSService(
-        api_key=os.getenv("ELEVENLABS_API_KEY"),
-        settings=ElevenLabsTTSService.Settings(
-            voice=os.getenv("ELEVENLABS_VOICE_ID"),
-            model=os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5"),
-            language=Language.UK,
+    # --- Text-to-Speech: OpenAI, українська (голос coral) ---
+    tts = OpenAITTSService(
+        api_key=api_key,
+        settings=OpenAITTSService.Settings(
+            voice=os.getenv("OPENAI_VOICE", "coral"),
+            model=os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
         ),
     )
 
     # --- LLM: OpenAI (швидка модель для низької затримки) ---
     llm = OpenAILLMService(
-        api_key=os.getenv("OPENAI_API_KEY"),
+        api_key=api_key,
         settings=OpenAILLMService.Settings(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             system_instruction=build_system_prompt(),
@@ -196,11 +189,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     tools = ToolsSchema(standard_tools=[CHECK_AVAILABILITY_SCHEMA, CREATE_BOOKING_SCHEMA])
     context = LLMContext(tools=tools)
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        # Silero VAD = детекція мовлення: коли гість говорить/замовк, перебивання.
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
-    )
+    # Серверний VAD у STT сам керує чергою/перебиванням — окремий vad_analyzer не потрібен.
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
     # Pipeline: аудіо-вхід → STT → агрегатор → LLM → TTS → аудіо-вихід
     pipeline = Pipeline(

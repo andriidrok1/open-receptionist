@@ -5,13 +5,15 @@
 Гость говорит с агентом голосом по-украински → агент отвечает голосом, отвечает на
 вопросы про отель и принимает предварительную бронь с устным подтверждением.
 
-## Архитектура (cascade pipeline)
+## Архитектура (cascade pipeline, весь стек на OpenAI)
 
 ```
-микрофон → Deepgram STT (nova-3, uk) → OpenAI (gpt-4o-mini) → ElevenLabs TTS (flash v2.5, uk) → динамик
+микрофон → OpenAI Realtime STT (uk) → OpenAI LLM (gpt-4o-mini) → OpenAI TTS (uk) → динамик
 ```
 
-- **Детекция речи** (когда гость начал/замолчал, перебивание) — Silero VAD, вшит в pipeline.
+- **Один провайдер — один ключ** (OpenAI): STT + LLM + TTS. Украинский подтверждён round-trip'ом.
+- **Детекция речи** (когда гость начал/замолчал, перебивание) — серверный VAD внутри
+  OpenAI Realtime STT (`turn_detection=None`), отдельный Silero VAD не нужен.
 - Транспорт: SmallWebRTC (микрофон/динамик через браузер, без внешних аккаунтов для дева).
 - Фреймворк: Pipecat 1.5.
 
@@ -22,16 +24,13 @@
 
 Виртуальное окружение уже создано в `.venv/` (Python 3.12, зависимости установлены).
 
-1. Ключи API — нужны три (у всех есть бесплатный кредит):
-   - Deepgram: https://console.deepgram.com/
-   - ElevenLabs: https://elevenlabs.io/ → Profile → API Keys (+ выбрать `ELEVENLABS_VOICE_ID`
-     из библиотеки голосов, лучше мультиязычный/украинский)
-   - OpenAI: https://platform.openai.com/api-keys
+1. Нужен ОДИН ключ — OpenAI (STT + LLM + TTS на нём же):
+   - https://platform.openai.com/api-keys (нужен баланс в Billing, ~$5)
 
    ```bash
    cd server
    cp .env.example .env
-   # впиши ключи в .env
+   # впиши OPENAI_API_KEY в .env
    ```
 
 2. Запуск:
@@ -91,5 +90,6 @@ python dashboard.py     # → http://localhost:8000
 
 - LLM = OpenAI gpt-4o-mini (быстрый, для низкой латентности; бюджет разговора ~300мс round-trip).
   Сменить модель — `OPENAI_MODEL` в `.env`.
-- Deepgram `numerals=True` включён — правильно распознаёт числа/даты (критично для броней).
+- STT/LLM/TTS — всё на OpenAI. Голос менять через `OPENAI_VOICE` (coral/nova/shimmer/…).
+- Перебивание и детекция речи — серверный VAD OpenAI (в STT), не Silero.
 - `uv` не используется (на машине его нет) — обычный venv + pip.
