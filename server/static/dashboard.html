@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Дашборд · голосовий агент</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --primary: #6c5ce7;
+    --primary-bar: #7b74ec;
+    --primary-soft: #efecfd;
+    --ink: #1b1f2a;
+    --ink-2: #6b7280;
+    --muted: #9aa1ad;
+    --hair: #edeef2;
+    --track: #eef0f4;
+    --good: #22b563;
+    --warn: #f0993a;
+    --crit: #ef5350;
+    --good-ink: #16a34a;
+    --radius: 16px;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font-size: 14px; }
+  .app { display: flex; min-height: 100vh; }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar {
+    width: 248px; flex: none; background: var(--surface);
+    border-right: 1px solid var(--hair); display: flex; flex-direction: column;
+    padding: 24px 16px; position: sticky; top: 0; height: 100vh;
+  }
+  .brand { text-align: center; padding: 4px 0 20px; border-bottom: 1px solid var(--hair); }
+  .crest {
+    width: 52px; height: 52px; margin: 0 auto 10px; border-radius: 50%;
+    display: grid; place-items: center; border: 2px solid var(--primary);
+    color: var(--primary);
+  }
+  .brand-name { font-weight: 700; letter-spacing: .14em; font-size: 15px; }
+  .brand-city { color: var(--muted); font-size: 12px; margin-top: 3px; }
+
+  .nav { margin-top: 18px; display: flex; flex-direction: column; gap: 2px; flex: 1; }
+  .nav a {
+    display: flex; align-items: center; gap: 12px; padding: 11px 14px;
+    border-radius: 11px; color: var(--ink-2); text-decoration: none; font-weight: 500;
+  }
+  .nav a svg { width: 20px; height: 20px; stroke: currentColor; }
+  .nav a:hover { background: #f7f7fa; color: var(--ink); }
+  .nav a.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+
+  .agent-card {
+    border: 1px solid var(--hair); border-radius: 14px; padding: 14px; margin-top: 16px;
+  }
+  .agent-row { display: flex; align-items: center; gap: 11px; }
+  .agent-mic {
+    width: 40px; height: 40px; border-radius: 50%; background: var(--primary);
+    display: grid; place-items: center; color: #fff; flex: none;
+  }
+  .agent-mic svg { width: 20px; height: 20px; }
+  .agent-role { font-size: 11px; color: var(--muted); }
+  .agent-name { font-weight: 700; font-size: 15px; line-height: 1.2; }
+  .agent-state { font-size: 12px; color: var(--good-ink); display: flex; align-items: center; gap: 5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
+  .agent-btn {
+    margin-top: 12px; width: 100%; padding: 9px; border: 1px solid var(--primary);
+    color: var(--primary); background: transparent; border-radius: 10px;
+    font-weight: 600; font-size: 13px; cursor: pointer;
+  }
+  .agent-btn:hover { background: var(--primary-soft); }
+
+  /* ---------- Main ---------- */
+  .main { flex: 1; padding: 26px 30px; min-width: 0; }
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .h1 { font-size: 26px; font-weight: 800; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--ink-2); margin-top: 4px; }
+  .pills { display: flex; gap: 10px; flex-wrap: wrap; }
+  .pill {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 12px;
+    padding: 9px 14px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 9px;
+    font-size: 13px; color: var(--ink-2);
+  }
+  .pill svg { width: 16px; height: 16px; stroke: var(--muted); }
+  .pill .strong { color: var(--ink); font-weight: 600; }
+  .pill .tiny { font-size: 11px; color: var(--muted); }
+  .pill-agent { line-height: 1.25; }
+
+  /* KPI */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 22px; }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 20px; display: flex; gap: 15px; align-items: flex-start;
+  }
+  .kpi-ic { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; color: #fff; flex: none; }
+  .kpi-ic svg { width: 23px; height: 23px; }
+  .kpi-label { color: var(--ink-2); font-size: 13px; }
+  .kpi-val { font-size: 27px; font-weight: 800; margin-top: 3px; letter-spacing: -.02em; }
+  .kpi-delta { font-size: 12px; margin-top: 7px; color: var(--muted); }
+  .kpi-delta .up { color: var(--good-ink); font-weight: 700; }
+  .kpi-delta .down { color: var(--crit); font-weight: 700; }
+
+  /* panels */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
+  .card { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px; }
+  .card-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .card-title { font-size: 16px; font-weight: 700; }
+
+  /* occupancy */
+  .occ-head, .occ-row { display: grid; grid-template-columns: 108px 1fr 74px 52px; align-items: center; gap: 14px; }
+  .occ-head { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .occ-row { padding: 9px 0; }
+  .occ-name { font-weight: 600; }
+  .occ-track { height: 9px; background: var(--track); border-radius: 6px; overflow: hidden; }
+  .occ-fill { height: 100%; border-radius: 6px; }
+  .occ-count { color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
+  .occ-pct { font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+  .legend { display: flex; gap: 22px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hair); color: var(--ink-2); font-size: 13px; }
+  .legend span { display: flex; align-items: center; gap: 7px; }
+  .legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+
+  /* revenue chart */
+  .chart { display: flex; gap: 12px; }
+  .yaxis { display: flex; flex-direction: column; justify-content: space-between; height: 260px; padding-bottom: 26px; color: var(--muted); font-size: 12px; text-align: right; width: 56px; }
+  .plotwrap { flex: 1; min-width: 0; }
+  .plot { position: relative; height: 260px; }
+  .gridline { position: absolute; left: 0; right: 0; border-top: 1px solid var(--hair); }
+  .bars { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: space-around; }
+  .barcol { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; width: 22%; }
+  .barval { font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 7px; font-variant-numeric: tabular-nums; }
+  .bar { width: 62px; max-width: 70%; background: var(--primary-bar); border-radius: 7px 7px 0 0; transition: height .5s ease, filter .15s; }
+  .bar:hover { filter: brightness(1.06); }
+  .xaxis { display: flex; justify-content: space-around; margin-top: 8px; color: var(--ink-2); font-size: 13px; }
+  .xaxis span { width: 22%; text-align: center; }
+
+  /* bookings table */
+  .tablewrap { margin-top: 4px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 10px 14px; white-space: nowrap; }
+  tbody td { padding: 14px; border-top: 1px solid var(--hair); white-space: nowrap; }
+  tbody tr:hover { background: #fafafb; }
+  .ref { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .num { font-variant-numeric: tabular-nums; }
+  .dates { color: var(--ink-2); }
+  .arrow { color: var(--muted); margin: 0 4px; }
+  .badge { display: inline-block; padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .btn-ghost { border: 1px solid var(--hair); background: var(--surface); color: var(--primary); font-weight: 600; padding: 9px 15px; border-radius: 10px; cursor: pointer; font-size: 13px; }
+  .btn-ghost:hover { background: var(--primary-soft); }
+  .tfoot { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; color: var(--muted); font-size: 13px; }
+  .pager { display: flex; gap: 6px; }
+  .pager button { width: 32px; height: 32px; border: 1px solid var(--hair); background: var(--surface); border-radius: 9px; cursor: pointer; color: var(--ink-2); }
+  .pager .cur { background: var(--primary-soft); color: var(--primary); border-color: transparent; font-weight: 700; }
+
+  @media (max-width: 1050px) { .kpis { grid-template-columns: repeat(2,1fr); } .grid2 { grid-template-columns: 1fr; } }
+  @media (max-width: 720px) { .sidebar { display: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="crest">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 17h16l-1.2-7-4 3-2.8-5-2.8 5-4-3z"/><path d="M4 20h16"/>
+        </svg>
+      </div>
+      <div class="brand-name" id="brandName">RIVIERA HOTEL</div>
+      <div class="brand-city" id="brandCity">Одеса, Україна</div>
+    </div>
+    <nav class="nav">
+      <a class="active" href="#">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        Огляд
+      </a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg> Броні</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M3 21V7l9-4 9 4v14"/><path d="M9 21v-6h6v6"/></svg> Номери</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/></svg> Гості</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/></svg> Дзвінки</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Фінанси</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z"/></svg> Налаштування</a>
+    </nav>
+    <div class="agent-card">
+      <div class="agent-row">
+        <div class="agent-mic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg></div>
+        <div>
+          <div class="agent-role">Голосовий агент</div>
+          <div class="agent-name" id="agentName">Оксана</div>
+          <div class="agent-state"><span class="dot"></span>Онлайн</div>
+        </div>
+      </div>
+      <button class="agent-btn">Налаштування агента</button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1 class="h1">Дашборд</h1>
+        <div class="sub">Огляд роботи голосового агента та бронювань</div>
+      </div>
+      <div class="pills">
+        <div class="pill pill-agent"><span class="dot"></span><div><div class="strong" id="pillAgent">Оксана · онлайн</div><div class="tiny">Голосовий агент активний</div></div></div>
+        <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg><span id="pillRange" class="strong">—</span></div>
+        <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg><span>Оновлено: <span id="pillUpd" class="strong">щойно</span></span></div>
+      </div>
+    </div>
+
+    <section class="kpis" id="kpis"></section>
+
+    <section class="grid2">
+      <div class="card">
+        <div class="card-h"><div class="card-title">Завантаження по типах номерів</div></div>
+        <div class="occ-head"><div>Тип номера</div><div></div><div style="text-align:right">Заброньовано</div><div style="text-align:right">Всього</div></div>
+        <div id="occ"></div>
+        <div class="legend">
+          <span><i style="background:var(--good)"></i>Є вільні номери</span>
+          <span><i style="background:var(--warn)"></i>Мало вільних</span>
+          <span><i style="background:var(--crit)"></i>Немає вільних</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><div class="card-title">Виручка по типах номерів (грн)</div></div>
+        <div class="chart">
+          <div class="yaxis" id="yaxis"></div>
+          <div class="plotwrap">
+            <div class="plot"><div id="grid"></div><div class="bars" id="bars"></div></div>
+            <div class="xaxis" id="xaxis"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:18px">
+      <div class="card-h"><div class="card-title">Бронювання</div><button class="btn-ghost">Переглянути всі брони</button></div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>№ броні</th><th>Гість</th><th>Телефон</th><th>Тип номера</th>
+            <th>Дати заїзду <span class="arrow">→</span> виїзду</th><th>Ночей</th><th>Гостей</th>
+            <th>Сума (грн)</th><th>Створено</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="tfoot"><div id="tcount">—</div><div class="pager"><button>‹</button><button class="cur">1</button><button>›</button></div></div>
+    </section>
+  </main>
+</div>
+
+<script type="module">
+const nf = new Intl.NumberFormat("uk-UA");
+const el = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
+
+const STATUS = { good: "var(--good)", warning: "var(--warn)", critical: "var(--crit)" };
+const BADGE = {
+  standard: ["#eef1ff", "#5566d8"],
+  superior: ["#e7f0fe", "#2f79d6"],
+  deluxe:   ["#fff1e3", "#e08636"],
+  suite:    ["#fde9e9", "#dc4b4b"],
+};
+const MONTHS = ["січ.","лют.","бер.","квіт.","трав.","черв.","лип.","серп.","вер.","жовт.","лист.","груд."];
+const fmtDate = (iso) => { const d = new Date(iso); return `${String(d.getDate()).padStart(2,"0")}.${String(d.getMonth()+1).padStart(2,"0")}.${d.getFullYear()}`; };
+const fmtRange = (a,b) => { const d1=new Date(a), d2=new Date(b); return `${d1.getDate()} ${MONTHS[d1.getMonth()]} – ${d2.getDate()} ${MONTHS[d2.getMonth()]} ${d2.getFullYear()}`; };
+const fmtCreated = (s) => { const d = new Date(s.replace(" ","T")); return `${fmtDate(d)}, ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+
+const KPI_META = [
+  { key: "total_bookings", label: "Броней всього", color: "#6c8cf5", fmt: (v)=>nf.format(v),
+    icon: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>' },
+  { key: "total_revenue", label: "Виручка (грн)", color: "#22b07d", fmt: (v)=>nf.format(v),
+    icon: '<rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M2 10h20"/><circle cx="17" cy="14" r="1.4"/>' },
+  { key: "total_guests", label: "Гостей прийнято", color: "#f0913a", fmt: (v)=>nf.format(v),
+    icon: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/>' },
+  { key: "avg_check", label: "Середній чек (грн)", color: "#7c6cf0", fmt: (v)=>nf.format(v),
+    icon: '<rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 9h20"/><path d="M6 15h4"/>' },
+];
+
+function renderKPIs(kpi, deltas) {
+  const box = document.getElementById("kpis"); box.innerHTML = "";
+  for (const m of KPI_META) {
+    const d = deltas[m.key];
+    let delta = '<span style="color:var(--muted)">немає даних за минулий період</span>';
+    if (d !== null && d !== undefined) {
+      const cls = d >= 0 ? "up" : "down";
+      const sign = d >= 0 ? "+" : "";
+      delta = `<span class="${cls}">${sign}${d}%</span> до попереднього періоду`;
+    }
+    box.appendChild(el(`
+      <div class="kpi">
+        <div class="kpi-ic" style="background:${m.color}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${m.icon}</svg>
+        </div>
+        <div>
+          <div class="kpi-label">${m.label}</div>
+          <div class="kpi-val">${m.fmt(kpi[m.key])}</div>
+          <div class="kpi-delta">${delta}</div>
+        </div>
+      </div>`));
+  }
+}
+
+function renderOccupancy(byType) {
+  const box = document.getElementById("occ"); box.innerHTML = "";
+  for (const t of byType) {
+    box.appendChild(el(`
+      <div class="occ-row">
+        <div class="occ-name">${t.label}</div>
+        <div class="occ-track"><div class="occ-fill" style="width:${t.occupancy_pct}%;background:${STATUS[t.status]}"></div></div>
+        <div class="occ-count">${t.booked} / ${t.total_rooms}</div>
+        <div class="occ-pct" style="color:${STATUS[t.status]}">${t.occupancy_pct}%</div>
+      </div>`));
+  }
+}
+
+function renderChart(byType) {
+  const max = Math.max(1, ...byType.map(t => t.revenue));
+  // nice max up to a round тис.
+  const step = Math.max(50000, Math.ceil(max / 4 / 50000) * 50000);
+  const niceMax = step * 4;
+  const yaxis = document.getElementById("yaxis"); yaxis.innerHTML = "";
+  const grid = document.getElementById("grid"); grid.innerHTML = "";
+  for (let i = 4; i >= 0; i--) {
+    const val = step * i;
+    yaxis.appendChild(el(`<div>${val === 0 ? "0" : (val/1000)+" тис."}</div>`));
+    grid.appendChild(el(`<div class="gridline" style="top:${(1 - i/4)*100}%"></div>`));
+  }
+  const bars = document.getElementById("bars"); bars.innerHTML = "";
+  const xaxis = document.getElementById("xaxis"); xaxis.innerHTML = "";
+  for (const t of byType) {
+    const h = (t.revenue / niceMax) * 100;
+    bars.appendChild(el(`
+      <div class="barcol" title="${t.label}: ${nf.format(t.revenue)} грн">
+        <div class="barval">${nf.format(t.revenue)}</div>
+        <div class="bar" style="height:${h}%"></div>
+      </div>`));
+    xaxis.appendChild(el(`<span>${t.label}</span>`));
+  }
+}
+
+function renderTable(bookings) {
+  const rows = document.getElementById("rows"); rows.innerHTML = "";
+  const view = bookings.slice(0, 5);
+  for (const b of view) {
+    const [bg, fg] = BADGE[b.room_type] || ["#eee", "#555"];
+    rows.appendChild(el(`
+      <tr>
+        <td class="ref">${b.ref_code}</td>
+        <td>${b.guest_name}</td>
+        <td class="num">${b.phone}</td>
+        <td><span class="badge" style="background:${bg};color:${fg}">${b.room_type_label}</span></td>
+        <td class="dates num">${fmtDate(b.check_in)}<span class="arrow">→</span>${fmtDate(b.check_out)}</td>
+        <td class="num">${b.nights}</td>
+        <td class="num">${b.guests}</td>
+        <td class="num" style="font-weight:600">${nf.format(b.total_price)}</td>
+        <td class="dates num">${fmtCreated(b.created_at)}</td>
+      </tr>`));
+  }
+  document.getElementById("tcount").textContent =
+    `Показано ${view.length} з ${bookings.length} бронювань`;
+}
+
+async function load() {
+  const r = await fetch("/api/stats");
+  const s = await r.json();
+  if (s.hotel) {
+    document.getElementById("brandName").textContent = s.hotel.name.toUpperCase();
+    document.getElementById("brandCity").textContent = s.hotel.city;
+    document.getElementById("agentName").textContent = s.hotel.agent;
+    document.getElementById("pillAgent").textContent = `${s.hotel.agent} · онлайн`;
+  }
+  document.getElementById("pillRange").textContent = fmtRange(s.period_start, s.period_end);
+  document.getElementById("pillUpd").textContent = "щойно";
+  renderKPIs(s.kpi, s.deltas);
+  renderOccupancy(s.by_type);
+  renderChart(s.by_type);
+  renderTable(s.bookings);
+}
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

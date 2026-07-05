@@ -9,23 +9,26 @@
 
 import sqlite3
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "hotel.db"
 
-# Типи номерів: канонічний ключ -> (людська назва укр., базова ціна грн/ніч, всього номерів)
+# Типи номерів: канонічний ключ -> (людська назва укр., базова ціна грн/ніч, всього номерів).
+# Порядок = порядок відображення (dict зберігає порядок вставки).
 ROOM_TYPES = {
-    "single": ("одномісний", 1200, 5),
-    "double": ("двомісний", 1800, 8),
-    "family": ("сімейний", 2500, 3),
+    "standard": ("Стандарт", 1200, 30),
+    "superior": ("Покращений", 1800, 25),
+    "deluxe": ("Делюкс", 2800, 20),
+    "suite": ("Люкс", 4500, 10),
 }
 
-# Синоніми з усного мовлення -> канонічний ключ
+# Синоніми з усного мовлення (укр./рос./англ.) -> канонічний ключ
 _ALIASES = {
-    "одномісний": "single", "одноместный": "single", "single": "single", "сингл": "single",
-    "двомісний": "double", "двухместный": "double", "double": "double", "дабл": "double",
-    "сімейний": "family", "семейный": "family", "family": "family", "сімейка": "family",
+    "стандарт": "standard", "стандартний": "standard", "standard": "standard", "стандартный": "standard",
+    "покращений": "superior", "улучшенный": "superior", "superior": "superior", "супіріор": "superior",
+    "делюкс": "deluxe", "deluxe": "deluxe", "делюксовий": "deluxe",
+    "люкс": "suite", "люксовий": "suite", "suite": "suite", "сьют": "suite", "апартаменти": "suite",
 }
 
 
@@ -111,6 +114,120 @@ def check_availability(check_in: str, check_out: str, room_type: str, guests: in
         "price_per_night": price,
         "total_price": price * nights,
         "rooms_left": max(rooms_left, 0),
+    }
+
+
+def list_bookings() -> list[dict]:
+    """Усі броні, найновіші зверху (для дашборда і таблиці)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM bookings ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        key = r["room_type"]
+        label = ROOM_TYPES.get(key, (key, 0, 0))[0]
+        try:
+            nights = _nights(r["check_in"], r["check_out"])
+        except ValueError:
+            nights = 0
+        out.append(
+            {
+                "ref_code": r["ref_code"],
+                "guest_name": r["guest_name"],
+                "phone": r["phone"],
+                "room_type": key,
+                "room_type_label": label,
+                "check_in": r["check_in"],
+                "check_out": r["check_out"],
+                "nights": nights,
+                "guests": r["guests"],
+                "total_price": r["total_price"],
+                "created_at": r["created_at"],
+            }
+        )
+    return out
+
+
+def _pct_delta(cur: float, prev: float) -> int | None:
+    """Відсоткова зміна період-до-періоду. None, якщо порівнювати нема з чим."""
+    if prev <= 0:
+        return None
+    return round((cur - prev) / prev * 100)
+
+
+def _availability_status(rooms_left: int, total_rooms: int) -> str:
+    """good — є вільні; warning — мало вільних; critical — немає вільних."""
+    if rooms_left <= 0:
+        return "critical"
+    if total_rooms and rooms_left / total_rooms <= 0.25:
+        return "warning"
+    return "good"
+
+
+def stats(period_days: int = 30) -> dict:
+    """Агрегати для дашборда за поточний період + дельти до попереднього.
+
+    Період рахується за датою створення броні (created_at). KPI — за поточний
+    період; дельти — поточний період проти попереднього такого ж вікна.
+    Завантаженість номерів — поточний стан інвентаря (активні броні), не період.
+    """
+    bookings = list_bookings()
+    now = datetime.now()
+    cur_start = now - timedelta(days=period_days)
+    prev_start = now - timedelta(days=2 * period_days)
+    today = date.today().isoformat()
+
+    def created(b: dict) -> datetime:
+        return datetime.fromisoformat(b["created_at"])
+
+    cur = [b for b in bookings if created(b) >= cur_start]
+    prev = [b for b in bookings if prev_start <= created(b) < cur_start]
+
+    def agg(rows: list[dict]) -> dict:
+        n = len(rows)
+        rev = sum(b["total_price"] for b in rows)
+        guests = sum(b["guests"] for b in rows)
+        return {
+            "total_bookings": n,
+            "total_revenue": rev,
+            "total_guests": guests,
+            "avg_check": round(rev / n) if n else 0,
+        }
+
+    cur_kpi = agg(cur)
+    prev_kpi = agg(prev)
+    deltas = {k: _pct_delta(cur_kpi[k], prev_kpi[k]) for k in cur_kpi}
+
+    by_type = []
+    for key, (label, price, total_rooms) in ROOM_TYPES.items():
+        in_period = [b for b in cur if b["room_type"] == key]
+        # "Активні" — броні, що ще не завершились (виїзд сьогодні або пізніше).
+        active = len([b for b in bookings if b["room_type"] == key and b["check_out"] >= today])
+        rooms_left = max(total_rooms - active, 0)
+        occupancy = round(active / total_rooms * 100) if total_rooms else 0
+        by_type.append(
+            {
+                "room_type": key,
+                "label": label,
+                "price_per_night": price,
+                "total_rooms": total_rooms,
+                "booked": active,
+                "rooms_left": rooms_left,
+                "occupancy_pct": occupancy,
+                "status": _availability_status(rooms_left, total_rooms),
+                "revenue": sum(b["total_price"] for b in in_period),
+            }
+        )
+
+    return {
+        "period_days": period_days,
+        "period_start": cur_start.date().isoformat(),
+        "period_end": now.date().isoformat(),
+        "kpi": cur_kpi,
+        "deltas": deltas,
+        "by_type": by_type,
+        "bookings": cur,
     }
 
 
