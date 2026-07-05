@@ -220,3 +220,7 @@ __marimo__/
 *.debug.log
 
 # Node.js (client/)
+
+# Local fake-PMS SQLite DB
+server/hotel.db
+*.db

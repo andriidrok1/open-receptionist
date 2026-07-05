@@ -18,9 +18,13 @@ Silero VAD, вшитий у user_aggregator нижче.
 """
 
 import os
+from datetime import date
 
+import pms
 from dotenv import load_dotenv
 from loguru import logger
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -35,6 +39,7 @@ from pipecat.runner.utils import create_transport
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
@@ -44,36 +49,109 @@ load_dotenv(override=True)
 # Назва готелю — міняй тут (потрапляє в системний промпт і привітання).
 HOTEL_NAME = os.getenv("HOTEL_NAME", "готель «Дніпро»")
 
-# Системний промпт: персона ресепшена. Українською, під озвучку.
-# Фаза 1 НЕ пише броні в базу — агент лише веде розмову і збирає деталі усно
-# з обов'язковим підтвердженням. Реальний запис броні — Фаза 2 (function calling).
-SYSTEM_PROMPT = f"""Ти — Оксана, адміністратор на ресепшені ({HOTEL_NAME}).
+# Системний промпт: персона ресепшена + інструкції з роботи з інструментами.
+# Фаза 2: агент реально перевіряє наявність і створює бронь через function calling.
+def build_system_prompt() -> str:
+    today = date.today().isoformat()
+    return f"""Ти — Оксана, адміністратор на ресепшені ({HOTEL_NAME}).
 Розмовляй природною українською мовою. Твої відповіді ОЗВУЧУЮТЬСЯ вголос, тому:
 не використовуй емодзі, списки, дужки, зірочки чи будь-яке форматування — лише
-звичайні речення, які легко вимовити.
+звичайні речення, які легко вимовити. Ціни називай словами природно
+(наприклад «тисяча вісімсот гривень за ніч»).
 
 Тримайся коротко: 1–2 речення за раз, як у живій телефонній розмові. Став одне
 питання за раз. Будь теплою й доброзичливою, але по суті.
 
-Що ти вмієш: відповідати на питання про готель (час заїзду і виїзду, наявність
-номерів, ціни, сніданок, паркінг) і приймати попереднє бронювання. Коли гість
-хоче забронювати, збери по черзі: дати заїзду і виїзду, тип номера, кількість
-гостей, ім'я та номер телефону. ОБОВ'ЯЗКОВО в кінці повтори бронювання вголос
-одним реченням і попроси підтвердити («Отже, ... — все вірно?»), перш ніж
-вважати його прийнятим.
+Сьогодні {today}. Коли гість називає дату усно («чотирнадцятого липня», «на
+наступних вихідних»), сам переведи її у формат РРРР-ММ-ДД. Якщо рік не названо —
+бери найближчий майбутній.
 
-Якщо не знаєш відповіді або питання складне — чесно скажи, що передаси
-адміністратору, і запропонуй записати контакт для зворотного дзвінка.
+Номери й ціни за ніч: одномісний — 1200 грн, двомісний — 1800 грн, сімейний —
+2500 грн. Заїзд з 14:00, виїзд до 12:00. Сніданок включено, паркінг безкоштовний.
 
-Довідкова інформація (заглушка, поки немає інтеграції з системою готелю):
-- Заїзд з 14:00, виїзд до 12:00.
-- Є одномісні, двомісні та сімейні номери. Сніданок включено. Є безкоштовний паркінг.
-- Точні ціни й наявність на конкретні дати ти уточнюєш у адміністратора."""
+БРОНЮВАННЯ — працюй тільки через інструменти, не вигадуй наявність і ціни сам:
+1. Збери по черзі: дати заїзду і виїзду, тип номера, кількість гостей.
+2. Виклич check_availability, щоб дізнатися наявність і повну вартість. Назви їх гостю.
+3. Якщо вільно і гість згоден — попроси ім'я та номер телефону.
+4. ОБОВ'ЯЗКОВО повтори всю бронь вголос одним реченням і попроси підтвердити
+   («Отже, двомісний номер з чотирнадцятого по сімнадцяте липня, троє гостей,
+   на ім'я Андрій — все вірно?»).
+5. ТІЛЬКИ після усного «так» виклич create_booking. Потім назви гостю номер
+   броні (ref_code) і подякуй.
+Якщо номерів немає — вибачся і запропонуй інші дати або інший тип номера.
+
+Якщо питання складне або поза межами бронювання — чесно скажи, що передаси
+адміністратору, і запропонуй записати контакт для зворотного дзвінка."""
+
+
+# --- Function-calling tools: агент реально ходить у PMS ---
+
+_ROOM_TYPE_ENUM = ["одномісний", "двомісний", "сімейний"]
+
+
+async def _handle_check_availability(params: FunctionCallParams) -> None:
+    a = params.arguments
+    result = pms.check_availability(
+        check_in=a.get("check_in_date"),
+        check_out=a.get("check_out_date"),
+        room_type=a.get("room_type"),
+        guests=int(a.get("guests") or 1),
+    )
+    logger.info(f"[tool] check_availability({dict(a)}) -> {result}")
+    await params.result_callback(result)
+
+
+async def _handle_create_booking(params: FunctionCallParams) -> None:
+    a = params.arguments
+    result = pms.create_booking(
+        check_in=a.get("check_in_date"),
+        check_out=a.get("check_out_date"),
+        room_type=a.get("room_type"),
+        guests=int(a.get("guests") or 1),
+        guest_name=a.get("guest_name"),
+        phone=a.get("phone"),
+    )
+    logger.info(f"[tool] create_booking({dict(a)}) -> {result}")
+    await params.result_callback(result)
+
+
+CHECK_AVAILABILITY_SCHEMA = FunctionSchema(
+    name="check_availability",
+    description=(
+        "Перевірити наявність номера і повну вартість на конкретні дати. "
+        "Виклич перед тим, як називати гостю ціну або підтверджувати бронь."
+    ),
+    properties={
+        "check_in_date": {"type": "string", "description": "Дата заїзду у форматі РРРР-ММ-ДД"},
+        "check_out_date": {"type": "string", "description": "Дата виїзду у форматі РРРР-ММ-ДД"},
+        "room_type": {"type": "string", "enum": _ROOM_TYPE_ENUM, "description": "Тип номера"},
+        "guests": {"type": "integer", "description": "Кількість гостей"},
+    },
+    required=["check_in_date", "check_out_date", "room_type", "guests"],
+)
+
+CREATE_BOOKING_SCHEMA = FunctionSchema(
+    name="create_booking",
+    description=(
+        "Створити бронювання в системі готелю. Виклич ТІЛЬКИ після того, як гість "
+        "усно підтвердив усі деталі броні."
+    ),
+    properties={
+        "check_in_date": {"type": "string", "description": "Дата заїзду у форматі РРРР-ММ-ДД"},
+        "check_out_date": {"type": "string", "description": "Дата виїзду у форматі РРРР-ММ-ДД"},
+        "room_type": {"type": "string", "enum": _ROOM_TYPE_ENUM, "description": "Тип номера"},
+        "guests": {"type": "integer", "description": "Кількість гостей"},
+        "guest_name": {"type": "string", "description": "Ім'я гостя"},
+        "phone": {"type": "string", "description": "Номер телефону для звʼязку"},
+    },
+    required=["check_in_date", "check_out_date", "room_type", "guests", "guest_name", "phone"],
+)
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     """Run the voice bot for this session."""
     logger.info("Starting hotel receptionist bot (uk)")
+    pms.init_db()
 
     # --- Speech-to-Text: Deepgram Nova-3, українська ---
     # numerals=True — правильно розпізнає числа/дати (критично для бронювань).
@@ -108,11 +186,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         api_key=os.getenv("ANTHROPIC_API_KEY"),
         settings=AnthropicLLMService.Settings(
             model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=build_system_prompt(),
         ),
     )
+    # Прив'язати хендлери до імен інструментів.
+    llm.register_function("check_availability", _handle_check_availability)
+    llm.register_function("create_booking", _handle_create_booking)
 
-    context = LLMContext()
+    tools = ToolsSchema(standard_tools=[CHECK_AVAILABILITY_SCHEMA, CREATE_BOOKING_SCHEMA])
+    context = LLMContext(tools=tools)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         # Silero VAD = детекція мовлення: коли гість говорить/замовк, перебивання.
