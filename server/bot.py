@@ -7,7 +7,7 @@
 """hotel-voice-agent — Голосовий ІІ-ресепшн для готелю (українською).
 
 Фаза 1: локальна голосова петля (cascade pipeline)
-    мікрофон → Deepgram STT (uk) → Claude → ElevenLabs TTS (uk) → динамік
+    мікрофон → Deepgram STT (uk) → OpenAI → ElevenLabs TTS (uk) → динамік
 
 «Детекція» мовлення (коли гість почав/закінчив говорити, і перебивання) робить
 Silero VAD, вшитий у user_aggregator нижче.
@@ -36,10 +36,10 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
-from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.llm_service import FunctionCallParams
+from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
@@ -182,11 +182,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
-    # --- LLM: Claude (швидка модель для низької затримки) ---
-    llm = AnthropicLLMService(
-        api_key=os.getenv("ANTHROPIC_API_KEY"),
-        settings=AnthropicLLMService.Settings(
-            model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+    # --- LLM: OpenAI (швидка модель для низької затримки) ---
+    llm = OpenAILLMService(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        settings=OpenAILLMService.Settings(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             system_instruction=build_system_prompt(),
         ),
     )

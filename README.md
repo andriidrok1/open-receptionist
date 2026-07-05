@@ -8,7 +8,7 @@
 ## Архитектура (cascade pipeline)
 
 ```
-микрофон → Deepgram STT (nova-3, uk) → Claude (Haiku) → ElevenLabs TTS (flash v2.5, uk) → динамик
+микрофон → Deepgram STT (nova-3, uk) → OpenAI (gpt-4o-mini) → ElevenLabs TTS (flash v2.5, uk) → динамик
 ```
 
 - **Детекция речи** (когда гость начал/замолчал, перебивание) — Silero VAD, вшит в pipeline.
@@ -26,7 +26,7 @@
    - Deepgram: https://console.deepgram.com/
    - ElevenLabs: https://elevenlabs.io/ → Profile → API Keys (+ выбрать `ELEVENLABS_VOICE_ID`
      из библиотеки голосов, лучше мультиязычный/украинский)
-   - Anthropic: https://console.anthropic.com/
+   - OpenAI: https://platform.openai.com/api-keys
 
    ```bash
    cd server
@@ -89,7 +89,7 @@ python dashboard.py     # → http://localhost:8000
 
 ## Заметки
 
-- LLM = Claude Haiku (быстрый, для низкой латентности; бюджет разговора ~300мс round-trip).
-  Сменить модель — `ANTHROPIC_MODEL` в `.env`.
+- LLM = OpenAI gpt-4o-mini (быстрый, для низкой латентности; бюджет разговора ~300мс round-trip).
+  Сменить модель — `OPENAI_MODEL` в `.env`.
 - Deepgram `numerals=True` включён — правильно распознаёт числа/даты (критично для броней).
 - `uv` не используется (на машине его нет) — обычный venv + pip.
