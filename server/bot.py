@@ -25,7 +25,13 @@ from dotenv import load_dotenv
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import (
+    Frame,
+    LLMRunFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -39,6 +45,7 @@ from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
     SpeechTimeoutUserTurnStopStrategy,
 )
+from pipecat.turns.types import ProcessFrameResult
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
@@ -66,8 +73,15 @@ def build_system_prompt() -> str:
 звичайні речення, які легко вимовити. Ціни називай словами природно
 (наприклад «тисяча вісімсот гривень за ніч»).
 
-Тримайся коротко: 1–2 речення за раз, як у живій телефонній розмові. Став одне
-питання за раз. Будь теплою й доброзичливою, але по суті.
+Тримайся коротко: 1–2 речення за раз, як у живій телефонній розмові. В одній
+репліці — МАКСИМУМ ОДНЕ питання, ніколи не став два питання поспіль. Без
+пустих вступів на кшталт «Дякую за інформацію» — одразу суть. Будь теплою й
+доброзичливою, але по суті.
+
+НІКОЛИ не оголошуй перевірку окремою реплікою і не чекай згоди гостя на неї.
+Якщо в тебе вже є дати, тип номера і кількість гостей — ВИКЛИКАЙ інструмент
+у цьому ж ході, без фраз «зараз перевірю, мить» з подальшим мовчанням. Гість
+не мусить нічого відповідати, щоб перевірка відбулася.
 
 Сьогодні {today}. Коли гість називає дату усно («чотирнадцятого липня», «на
 наступних вихідних»), сам переведи її у формат РРРР-ММ-ДД. Якщо рік не названо —
@@ -194,6 +208,33 @@ TAKE_MESSAGE_SCHEMA = FunctionSchema(
 )
 
 
+class ServerVADSpeechTimeoutStopStrategy(SpeechTimeoutUserTurnStopStrategy):
+    """SpeechTimeout-стратегія, яка розуміє події СЕРВЕРНОГО VAD.
+
+    Базова стратегія слухає лише VADUser*-фрейми (локальний VAD). OpenAI
+    Realtime STT із серверним VAD шле UserStartedSpeakingFrame /
+    UserStoppedSpeakingFrame — базова стратегія їх не бачила і закривала хід
+    за таймером транскрипта, поки гість ще договорював («Так. Так.» різалось
+    на два ходи → агент відповідав двічі). Тут серверні події мапляться на
+    VAD-обробники, тож таймер тримається, доки гість реально говорить.
+    """
+
+    def __init__(self, *, server_vad_stop_secs: float, **kwargs):
+        super().__init__(**kwargs)
+        self._server_vad_stop_secs = server_vad_stop_secs
+
+    async def process_frame(self, frame: Frame) -> ProcessFrameResult:
+        if isinstance(frame, UserStartedSpeakingFrame):
+            await self._handle_vad_user_started_speaking(None)
+            return ProcessFrameResult.CONTINUE
+        if isinstance(frame, UserStoppedSpeakingFrame):
+            await self._handle_vad_user_stopped_speaking(
+                VADUserStoppedSpeakingFrame(stop_secs=self._server_vad_stop_secs)
+            )
+            return ProcessFrameResult.CONTINUE
+        return await super().process_frame(frame)
+
+
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     """Run the voice bot for this session."""
     logger.info("Starting hotel receptionist bot (uk)")
@@ -221,7 +262,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         settings=OpenAIRealtimeSTTService.Settings(
             model=os.getenv("OPENAI_STT_MODEL", "gpt-4o-transcribe"),
             language=Language.UK,
-            noise_reduction="far_field",
+            # near_field = мікрофон близько (ноутбук/гарнітура — локальні тести).
+            # Для телефонії (Фаза 4) перемкнути на far_field через env.
+            noise_reduction=os.getenv("OPENAI_STT_NOISE", "near_field"),
         ),
     )
 
@@ -275,7 +318,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         user_params=LLMUserAggregatorParams(
             user_turn_strategies=UserTurnStrategies(
                 start=[TranscriptionUserTurnStartStrategy()],
-                stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.7)],
+                stop=[ServerVADSpeechTimeoutStopStrategy(
+                    user_speech_timeout=0.7, server_vad_stop_secs=0.8)],
             ),
         ),
     )
