@@ -29,7 +29,17 @@ from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
+from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
+    TranscriptionUserTurnStartStrategy,
+)
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+    SpeechTimeoutUserTurnStopStrategy,
+)
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
@@ -69,6 +79,9 @@ def build_system_prompt() -> str:
 
 БРОНЮВАННЯ — працюй тільки через інструменти, не вигадуй наявність і ціни сам:
 1. Збери по черзі: дати заїзду і виїзду, тип номера, кількість гостей.
+   Якщо гість уже чітко назвав щось із цього («з чотирнадцятого по сімнадцяте
+   липня, на двох») — НЕ перепитуй це окремо, одразу переходь до перевірки.
+   Питай лише те, чого справді бракує.
 2. Виклич check_availability, щоб дізнатися наявність і повну вартість. Назви їх гостю.
 3. Якщо вільно і гість згоден — попроси ім'я та номер телефону. Телефон
    ОБОВ'ЯЗКОВО повтори вголос цифра за цифрою («нуль, шість, сім…») і спитай,
@@ -201,7 +214,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             "type": "server_vad",
             "threshold": 0.5,
             "prefix_padding_ms": 300,
-            "silence_duration_ms": 500,
+            # 800мс: коротша пауза різала фразу гостя навпіл («Однак… 17 липня»)
+            # і агент відповідав ДВІЧІ — на кожен шматок окремо.
+            "silence_duration_ms": 800,
         },
         settings=OpenAIRealtimeSTTService.Settings(
             model=os.getenv("OPENAI_STT_MODEL", "gpt-4o-transcribe"),
@@ -250,8 +265,20 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         standard_tools=[CHECK_AVAILABILITY_SCHEMA, CREATE_BOOKING_SCHEMA, TAKE_MESSAGE_SCHEMA]
     )
     context = LLMContext(tools=tools)
-    # Серверний VAD у STT сам керує чергою/перебиванням — окремий vad_analyzer не потрібен.
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+    # Стратегії ходу задаємо ЯВНО. Дефолтний TurnAnalyzer (smart-turn модель)
+    # у зв'язці з серверним VAD + gpt-4o-transcribe (без стрім-дельт) не бачив
+    # межі мовлення і закривав хід по таймауту ~2с — саме звідси була велика
+    # затримка відповіді. SpeechTimeout закриває хід за 0.7с після фінального
+    # транскрипта.
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            user_turn_strategies=UserTurnStrategies(
+                start=[TranscriptionUserTurnStartStrategy()],
+                stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.7)],
+            ),
+        ),
+    )
 
     # Pipeline: аудіо-вхід → STT → агрегатор → LLM → TTS → аудіо-вихід
     pipeline = Pipeline(
