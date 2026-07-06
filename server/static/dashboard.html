@@ -250,6 +250,18 @@
       </div>
       <div class="tfoot"><div id="tcount">—</div><div class="pager"><button>‹</button><button class="cur">1</button><button>›</button></div></div>
     </section>
+
+    <section class="card" style="margin-top:18px" id="msgCard" hidden>
+      <div class="card-h">
+        <div class="card-title">Запити на зворотний дзвінок <span class="badge" id="msgCount" style="background:var(--primary-soft);color:var(--primary);margin-left:6px"></span></div>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Гість</th><th>Телефон</th><th>Питання</th><th>Отримано</th></tr></thead>
+          <tbody id="msgRows"></tbody>
+        </table>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -364,6 +376,23 @@ function renderTable(bookings) {
     `Показано ${view.length} з ${bookings.length} бронювань`;
 }
 
+function renderMessages(messages) {
+  const card = document.getElementById("msgCard");
+  const list = messages || [];
+  card.hidden = list.length === 0;
+  document.getElementById("msgCount").textContent = list.length;
+  const rows = document.getElementById("msgRows"); rows.innerHTML = "";
+  for (const m of list.slice(0, 8)) {
+    rows.appendChild(el(`
+      <tr>
+        <td style="font-weight:600">${m.guest_name}</td>
+        <td class="num">${m.phone}</td>
+        <td style="white-space:normal;max-width:420px">${m.topic}</td>
+        <td class="dates num">${fmtCreated(m.created_at)}</td>
+      </tr>`));
+  }
+}
+
 async function load() {
   const r = await fetch("/api/stats");
   const s = await r.json();
@@ -379,6 +408,7 @@ async function load() {
   renderOccupancy(s.by_type);
   renderChart(s.by_type);
   renderTable(s.bookings);
+  renderMessages(s.messages);
 }
 
 load();

@@ -65,6 +65,19 @@ def init_db() -> None:
             )
             """
         )
+        # Запити на зворотний дзвінок: питання поза бронюванням, які агент
+        # передає адміністратору (спа, тварини, банкети тощо).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id          TEXT PRIMARY KEY,
+                guest_name  TEXT NOT NULL,
+                phone       TEXT NOT NULL,
+                topic       TEXT NOT NULL,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         conn.commit()
 
 
@@ -149,6 +162,30 @@ def list_bookings() -> list[dict]:
     return out
 
 
+def take_message(guest_name: str, phone: str, topic: str) -> dict:
+    """Записати запит на зворотний дзвінок (питання поза межами бронювання)."""
+    if not (phone and phone.strip()):
+        return {"success": False, "error": "не вказано телефон для зворотного дзвінка"}
+    if not (topic and topic.strip()):
+        return {"success": False, "error": "не вказано суть питання"}
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO messages (id, guest_name, phone, topic) VALUES (?, ?, ?, ?)",
+            (uuid.uuid4().hex, (guest_name or "").strip() or "Гість", phone.strip(), topic.strip()),
+        )
+        conn.commit()
+    return {"success": True, "note": "запит записано, адміністратор передзвонить"}
+
+
+def list_messages() -> list[dict]:
+    """Усі запити на зворотний дзвінок, найновіші зверху (для дашборда)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM messages ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _pct_delta(cur: float, prev: float) -> int | None:
     """Відсоткова зміна період-до-періоду. None, якщо порівнювати нема з чим."""
     if prev <= 0:
@@ -228,6 +265,7 @@ def stats(period_days: int = 30) -> dict:
         "deltas": deltas,
         "by_type": by_type,
         "bookings": cur,
+        "messages": list_messages(),
     }
 
 

@@ -69,16 +69,23 @@ def build_system_prompt() -> str:
 БРОНЮВАННЯ — працюй тільки через інструменти, не вигадуй наявність і ціни сам:
 1. Збери по черзі: дати заїзду і виїзду, тип номера, кількість гостей.
 2. Виклич check_availability, щоб дізнатися наявність і повну вартість. Назви їх гостю.
-3. Якщо вільно і гість згоден — попроси ім'я та номер телефону.
-4. ОБОВ'ЯЗКОВО повтори всю бронь вголос одним реченням і попроси підтвердити
-   («Отже, двомісний номер з чотирнадцятого по сімнадцяте липня, троє гостей,
-   на ім'я Андрій — все вірно?»).
-5. ТІЛЬКИ після усного «так» виклич create_booking. Потім назви гостю номер
-   броні (ref_code) і подякуй.
+3. Якщо вільно і гість згоден — попроси ім'я та номер телефону. Телефон
+   ОБОВ'ЯЗКОВО повтори вголос цифра за цифрою («нуль, шість, сім…») і спитай,
+   чи правильно записала — по телефону цифри часто чуються нечітко. Якщо гість
+   виправляє — повтори виправлений номер ще раз.
+4. Перед створенням броні ОБОВ'ЯЗКОВО повтори вголос УСІ деталі разом: тип
+   номера, дати заїзду і виїзду, кількість гостей, ім'я та повну вартість
+   («Отже, покращений номер з чотирнадцятого по сімнадцяте липня, двоє гостей,
+   на ім'я Тарас, разом п'ять тисяч чотириста гривень — підтверджуєте?»).
+   НЕ скорочуй це до одного питання про ціну — гість має почути всю бронь.
+5. ТІЛЬКИ після усного «так» на повний переказ броні виклич create_booking.
+   Потім назви гостю номер броні (ref_code) і подякуй.
 Якщо номерів немає — вибачся і запропонуй інші дати або інший тип номера.
 
-Якщо питання складне або поза межами бронювання — чесно скажи, що передаси
-адміністратору, і запропонуй записати контакт для зворотного дзвінка."""
+Якщо питання поза межами бронювання (спа, тварини, банкети, скарги тощо) —
+чесно скажи, що уточниш у адміністратора і він передзвонить. Попроси ім'я та
+телефон (телефон теж повтори по цифрах) і виклич take_message. НЕ вигадуй
+відповідь і не кажи «записала», доки інструмент не підтвердив запис."""
 
 
 # --- Function-calling tools: агент реально ходить у PMS ---
@@ -130,8 +137,9 @@ CHECK_AVAILABILITY_SCHEMA = FunctionSchema(
 CREATE_BOOKING_SCHEMA = FunctionSchema(
     name="create_booking",
     description=(
-        "Створити бронювання в системі готелю. Виклич ТІЛЬКИ після того, як гість "
-        "усно підтвердив усі деталі броні."
+        "Створити бронювання в системі готелю. Виклич ТІЛЬКИ після того, як ти вголос "
+        "повторила гостю ВСІ деталі броні (тип номера, дати, кількість гостей, ім'я, "
+        "телефон, повну вартість) і гість явно підтвердив («так»)."
     ),
     properties={
         "check_in_date": {"type": "string", "description": "Дата заїзду у форматі РРРР-ММ-ДД"},
@@ -142,6 +150,33 @@ CREATE_BOOKING_SCHEMA = FunctionSchema(
         "phone": {"type": "string", "description": "Номер телефону для звʼязку"},
     },
     required=["check_in_date", "check_out_date", "room_type", "guests", "guest_name", "phone"],
+)
+
+
+async def _handle_take_message(params: FunctionCallParams) -> None:
+    a = params.arguments
+    result = pms.take_message(
+        guest_name=a.get("guest_name"),
+        phone=a.get("phone"),
+        topic=a.get("topic"),
+    )
+    logger.info(f"[tool] take_message({dict(a)}) -> {result}")
+    await params.result_callback(result)
+
+
+TAKE_MESSAGE_SCHEMA = FunctionSchema(
+    name="take_message",
+    description=(
+        "Записати запит на зворотний дзвінок від адміністратора. Виклич, коли питання "
+        "гостя поза межами бронювання і ти пообіцяла, що адміністратор передзвонить. "
+        "Спершу дізнайся ім'я та телефон гостя."
+    ),
+    properties={
+        "guest_name": {"type": "string", "description": "Ім'я гостя"},
+        "phone": {"type": "string", "description": "Телефон для зворотного дзвінка"},
+        "topic": {"type": "string", "description": "Суть питання гостя, одним-двома реченнями"},
+    },
+    required=["guest_name", "phone", "topic"],
 )
 
 
@@ -186,8 +221,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # Прив'язати хендлери до імен інструментів.
     llm.register_function("check_availability", _handle_check_availability)
     llm.register_function("create_booking", _handle_create_booking)
+    llm.register_function("take_message", _handle_take_message)
 
-    tools = ToolsSchema(standard_tools=[CHECK_AVAILABILITY_SCHEMA, CREATE_BOOKING_SCHEMA])
+    tools = ToolsSchema(
+        standard_tools=[CHECK_AVAILABILITY_SCHEMA, CREATE_BOOKING_SCHEMA, TAKE_MESSAGE_SCHEMA]
+    )
     context = LLMContext(tools=tools)
     # Серверний VAD у STT сам керує чергою/перебиванням — окремий vad_analyzer не потрібен.
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
