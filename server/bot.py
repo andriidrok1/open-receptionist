@@ -32,6 +32,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
+from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.stt import OpenAIRealtimeSTTService
@@ -201,14 +202,28 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
-    # --- Text-to-Speech: OpenAI, українська (голос coral) ---
-    tts = OpenAITTSService(
-        api_key=api_key,
-        settings=OpenAITTSService.Settings(
-            voice=os.getenv("OPENAI_VOICE", "coral"),
-            model=os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
-        ),
-    )
+    # --- Text-to-Speech: ElevenLabs (Sarah, flash v2.5 — низька затримка) ---
+    # Звучить помітно живіше за OpenAI TTS українською. speed 0.95 = трохи
+    # повільніше за замовчування. Без ELEVENLABS_API_KEY — відкат на OpenAI.
+    elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
+    if elevenlabs_key:
+        tts = ElevenLabsTTSService(
+            api_key=elevenlabs_key,
+            settings=ElevenLabsTTSService.Settings(
+                voice=os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL"),  # Sarah
+                model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
+                language=Language.UK,
+                speed=float(os.getenv("ELEVENLABS_SPEED", "0.95")),
+            ),
+        )
+    else:
+        tts = OpenAITTSService(
+            api_key=api_key,
+            settings=OpenAITTSService.Settings(
+                voice=os.getenv("OPENAI_VOICE", "coral"),
+                model=os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+            ),
+        )
 
     # --- LLM: OpenAI (швидка модель для низької затримки) ---
     llm = OpenAILLMService(

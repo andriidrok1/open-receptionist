@@ -8,10 +8,14 @@
 ## Архитектура (cascade pipeline, весь стек на OpenAI)
 
 ```
-микрофон → OpenAI Realtime STT (uk) → OpenAI LLM (gpt-4o-mini) → OpenAI TTS (uk) → динамик
+микрофон → OpenAI Realtime STT (uk) → OpenAI LLM (gpt-4o-mini) → ElevenLabs TTS (Sarah, uk) → динамик
 ```
 
-- **Один провайдер — один ключ** (OpenAI): STT + LLM + TTS. Украинский подтверждён round-trip'ом.
+- **STT + LLM** — OpenAI (один ключ). **TTS** — ElevenLabs (голос Sarah, `eleven_flash_v2_5`,
+  темп 0.95): украинский звучит заметно живее OpenAI TTS. Без `ELEVENLABS_API_KEY`
+  бот автоматически откатывается на OpenAI TTS (coral).
+- ElevenLabs free-тариф: ~10к символов/мес (хватает на ~10-15 тестовых разговоров),
+  работают только premade-голоса. Для демо/продакшена — Starter $5/мес.
 - **Детекция речи** (когда гость начал/замолчал, перебивание) — серверный VAD внутри
   OpenAI Realtime STT (`turn_detection=None`), отдельный Silero VAD не нужен.
 - Транспорт: SmallWebRTC (микрофон/динамик через браузер, без внешних аккаунтов для дева).
@@ -107,6 +111,7 @@ python eval.py T3 T6               # только выбранные
 
 - LLM = OpenAI gpt-4o-mini (быстрый, для низкой латентности; бюджет разговора ~300мс round-trip).
   Сменить модель — `OPENAI_MODEL` в `.env`.
-- STT/LLM/TTS — всё на OpenAI. Голос менять через `OPENAI_VOICE` (coral/nova/shimmer/…).
+- Голос менять через `ELEVENLABS_VOICE_ID` (premade-альтернативы — в `.env.example`),
+  темп через `ELEVENLABS_SPEED`. Откат на OpenAI TTS: убрать `ELEVENLABS_API_KEY` из `.env`.
 - Перебивание и детекция речи — серверный VAD OpenAI (в STT), не Silero.
 - `uv` не используется (на машине его нет) — обычный venv + pip.
