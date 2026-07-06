@@ -189,14 +189,22 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     api_key = os.getenv("OPENAI_API_KEY")
 
     # --- Speech-to-Text: OpenAI Realtime STT, українська ---
-    # turn_detection=None → серверний VAD: OpenAI сам визначає, коли гість
-    # почав/замовк, і сам обробляє перебивання. Тому окремий Silero VAD не потрібен.
+    # Серверний VAD треба задавати ЯВНО: turn_detection=None ("server default")
+    # для transcription-сесій означає VAD ВИМКНЕНО — фінальний транскрипт не
+    # приходить ніколи, агент "не чує" гостя (перевірено проти API 2026-07-06).
+    # gpt-realtime-whisper серверний VAD не підтримує взагалі, тому модель
+    # gpt-4o-transcribe (вона ж точніша на українських числах/датах).
     # noise_reduction="far_field" — під телефонну/кімнатну акустику.
     stt = OpenAIRealtimeSTTService(
         api_key=api_key,
-        turn_detection=None,
+        turn_detection={
+            "type": "server_vad",
+            "threshold": 0.5,
+            "prefix_padding_ms": 300,
+            "silence_duration_ms": 500,
+        },
         settings=OpenAIRealtimeSTTService.Settings(
-            model=os.getenv("OPENAI_STT_MODEL", "gpt-realtime-whisper"),
+            model=os.getenv("OPENAI_STT_MODEL", "gpt-4o-transcribe"),
             language=Language.UK,
             noise_reduction="far_field",
         ),
