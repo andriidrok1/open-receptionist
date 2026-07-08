@@ -6,14 +6,16 @@
 
 """hotel-voice-agent — Голосовий ІІ-ресепшн для готелю (українською).
 
-Фаза 1: локальна голосова петля (cascade pipeline), увесь стек на OpenAI
-    мікрофон → OpenAI Realtime STT (uk) → OpenAI LLM → OpenAI TTS (uk) → динамік
+Cascade pipeline:
+    мікрофон → [Silero VAD] → STT (uk) → OpenAI LLM → ElevenLabs TTS → динамік
 
-«Детекція» мовлення (коли гість почав/закінчив говорити, і перебивання) робить
-серверний VAD усередині OpenAI Realtime STT (turn_detection=None).
+STT перемикається через STT_PROVIDER:
+    elevenlabs (за замовч.) — Scribe v2 Realtime, найкраще розпізнає українську;
+        сегментацію мовлення робить локальний Silero VAD.
+    openai — gpt-4o-transcribe із серверним VAD (запасний).
 
 Запуск:
-    uv run bot.py         # або: python bot.py
+    python bot.py
 потім відкрий http://localhost:7860/client і натисни Connect (дозволь мікрофон).
 """
 
@@ -32,8 +34,11 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -42,6 +47,9 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
     TranscriptionUserTurnStartStrategy,
 )
+from pipecat.turns.user_start.vad_user_turn_start_strategy import (
+    VADUserTurnStartStrategy,
+)
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
     SpeechTimeoutUserTurnStopStrategy,
 )
@@ -49,6 +57,7 @@ from pipecat.turns.types import ProcessFrameResult
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
+from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService, CommitStrategy
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
@@ -258,37 +267,58 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     pms.init_db()
 
     api_key = os.getenv("OPENAI_API_KEY")
+    elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
 
-    # --- Speech-to-Text: OpenAI Realtime STT, українська ---
-    # Серверний VAD треба задавати ЯВНО: turn_detection=None ("server default")
-    # для transcription-сесій означає VAD ВИМКНЕНО — фінальний транскрипт не
-    # приходить ніколи, агент "не чує" гостя (перевірено проти API 2026-07-06).
-    # gpt-realtime-whisper серверний VAD не підтримує взагалі, тому модель
-    # gpt-4o-transcribe (вона ж точніша на українських числах/датах).
-    # noise_reduction="far_field" — під телефонну/кімнатну акустику.
-    stt = OpenAIRealtimeSTTService(
-        api_key=api_key,
-        turn_detection={
-            "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            # 800мс: коротша пауза різала фразу гостя навпіл («Однак… 17 липня»)
-            # і агент відповідав ДВІЧІ — на кожен шматок окремо.
-            "silence_duration_ms": 800,
-        },
-        settings=OpenAIRealtimeSTTService.Settings(
-            model=os.getenv("OPENAI_STT_MODEL", "gpt-4o-transcribe"),
-            language=Language.UK,
-            # near_field = мікрофон близько (ноутбук/гарнітура — локальні тести).
-            # Для телефонії (Фаза 4) перемкнути на far_field через env.
-            noise_reduction=os.getenv("OPENAI_STT_NOISE", "near_field"),
-        ),
-    )
+    # --- Speech-to-Text: перемикач провайдера через STT_PROVIDER ---
+    # "elevenlabs" (за замовч.): Scribe v2 Realtime — за незалежними бенчмарками
+    #   найкраще розпізнає українську. Сам НЕ детектить мовлення — сегментацію
+    #   робить локальний Silero VAD (канонічна схема Pipecat), який виробляє
+    #   VADUser*-фрейми і для коміту STT, і для стратегії кінця ходу.
+    # "openai": gpt-4o-transcribe із серверним VAD (запасний варіант).
+    stt_provider = os.getenv("STT_PROVIDER", "elevenlabs" if elevenlabs_key else "openai")
+    vad_processor = None
+
+    if stt_provider == "elevenlabs":
+        stt = ElevenLabsRealtimeSTTService(
+            api_key=elevenlabs_key,
+            commit_strategy=CommitStrategy.MANUAL,  # коміт за локальним Silero VAD
+            settings=ElevenLabsRealtimeSTTService.Settings(
+                model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime"),
+                language=Language.UK,
+                # keyterms підвищують точність доменних слів (типи номерів тощо).
+                keyterms=_ROOM_TYPE_ENUM + ["бронювання", "заїзд", "виїзд", "готель"],
+            ),
+        )
+        # Локальний VAD: він і сегментує мовлення для STT, і дає межі ходу.
+        # stop_secs=0.8 — пауза, після якої вважаємо, що гість договорив.
+        vad_processor = VADProcessor(
+            vad_analyzer=SileroVADAnalyzer(
+                params=VADParams(confidence=0.7, start_secs=0.2, stop_secs=0.8, min_volume=0.6)
+            )
+        )
+    else:
+        # Серверний VAD треба задавати ЯВНО: turn_detection=None для
+        # transcription-сесій = VAD ВИМКНЕНО (docstring Pipecat бреше), фінальний
+        # транскрипт не приходить ніколи. gpt-realtime-whisper серверний VAD не
+        # підтримує → gpt-4o-transcribe. near_field — мікрофон близько (ноут).
+        stt = OpenAIRealtimeSTTService(
+            api_key=api_key,
+            turn_detection={
+                "type": "server_vad",
+                "threshold": 0.5,
+                "prefix_padding_ms": 300,
+                "silence_duration_ms": 800,
+            },
+            settings=OpenAIRealtimeSTTService.Settings(
+                model=os.getenv("OPENAI_STT_MODEL", "gpt-4o-transcribe"),
+                language=Language.UK,
+                noise_reduction=os.getenv("OPENAI_STT_NOISE", "near_field"),
+            ),
+        )
 
     # --- Text-to-Speech: ElevenLabs (Sarah, flash v2.5 — низька затримка) ---
     # Звучить помітно живіше за OpenAI TTS українською. speed 0.95 = трохи
     # повільніше за замовчування. Без ELEVENLABS_API_KEY — відкат на OpenAI.
-    elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
     if elevenlabs_key:
         tts = ElevenLabsTTSService(
             api_key=elevenlabs_key,
@@ -331,26 +361,36 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         standard_tools=[CHECK_AVAILABILITY_SCHEMA, CREATE_BOOKING_SCHEMA, TAKE_MESSAGE_SCHEMA]
     )
     context = LLMContext(tools=tools)
-    # Стратегії ходу задаємо ЯВНО. Дефолтний TurnAnalyzer (smart-turn модель)
-    # у зв'язці з серверним VAD + gpt-4o-transcribe (без стрім-дельт) не бачив
-    # межі мовлення і закривав хід по таймауту ~2с — саме звідси була велика
-    # затримка відповіді. SpeechTimeout закриває хід за 0.7с після фінального
-    # транскрипта.
+    # Стратегії ходу задаємо ЯВНО (дефолтний TurnAnalyzer = smart-turn модель,
+    # яка в нашій зв'язці не бачила межі мовлення і закривала хід таймаутом ~2с).
+    # SpeechTimeout закриває хід за 0.7с після фінального транскрипта.
+    if vad_processor is not None:
+        # ElevenLabs + локальний Silero VAD: VAD сам виробляє VADUser*-фрейми,
+        # тож базова стратегія працює напряму (start за VAD, stop за таймером).
+        turn_strategies = UserTurnStrategies(
+            start=[VADUserTurnStartStrategy(), TranscriptionUserTurnStartStrategy()],
+            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.7)],
+        )
+    else:
+        # OpenAI серверний VAD шле лише UserStarted/StoppedSpeakingFrame (не VAD*),
+        # тому потрібен адаптер, що мапить їх на VAD-обробники.
+        turn_strategies = UserTurnStrategies(
+            start=[TranscriptionUserTurnStartStrategy()],
+            stop=[ServerVADSpeechTimeoutStopStrategy(
+                user_speech_timeout=0.7, server_vad_stop_secs=0.8)],
+        )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            user_turn_strategies=UserTurnStrategies(
-                start=[TranscriptionUserTurnStartStrategy()],
-                stop=[ServerVADSpeechTimeoutStopStrategy(
-                    user_speech_timeout=0.7, server_vad_stop_secs=0.8)],
-            ),
-        ),
+        user_params=LLMUserAggregatorParams(user_turn_strategies=turn_strategies),
     )
 
-    # Pipeline: аудіо-вхід → STT → агрегатор → LLM → TTS → аудіо-вихід
+    # Pipeline: аудіо-вхід → [VAD] → STT → агрегатор → LLM → TTS → аудіо-вихід
+    # VAD-процесор (для ElevenLabs STT) має стояти ПЕРЕД STT: його VADUser*-фрейми
+    # і комітять STT, і живлять стратегію кінця ходу нижче за течією.
     pipeline = Pipeline(
         [
             transport.input(),
+            *([vad_processor] if vad_processor is not None else []),
             stt,
             user_aggregator,
             llm,
