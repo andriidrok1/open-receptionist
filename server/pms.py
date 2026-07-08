@@ -7,6 +7,7 @@
 Формат дат скрізь: 'РРРР-ММ-ДД' (ISO). LLM перетворює усну дату в цей формат.
 """
 
+import re
 import sqlite3
 import uuid
 from datetime import date, datetime, timedelta
@@ -30,6 +31,16 @@ _ALIASES = {
     "делюкс": "deluxe", "deluxe": "deluxe", "делюксовий": "deluxe",
     "люкс": "suite", "люксовий": "suite", "suite": "suite", "сьют": "suite", "апартаменти": "suite",
 }
+
+
+def normalize_phone(raw: str | None) -> str | None:
+    """Звести телефон до цифр (і провідного +): «067 123 45 67» → «0671234567».
+    Якщо цифр немає взагалі (LLM передав слова) — лишаємо як є, щоб проблема
+    була видима операторові, а не тихо загубилась."""
+    if not raw:
+        return raw
+    digits = re.sub(r"[^\d+]", "", raw)
+    return digits or raw
 
 
 def normalize_room_type(raw: str) -> str | None:
@@ -164,6 +175,7 @@ def list_bookings() -> list[dict]:
 
 def take_message(guest_name: str, phone: str, topic: str) -> dict:
     """Записати запит на зворотний дзвінок (питання поза межами бронювання)."""
+    phone = normalize_phone(phone)
     if not (phone and phone.strip()):
         return {"success": False, "error": "не вказано телефон для зворотного дзвінка"}
     if not (topic and topic.strip()):
@@ -269,6 +281,17 @@ def stats(period_days: int = 30) -> dict:
     }
 
 
+def _generate_ref_code(conn: sqlite3.Connection) -> str:
+    """Унікальний номер броні. Шестизначне число (без ведучих нулів), щоб TTS
+    читав його природно («Бе-ер сто двадцять три чотириста»), а не по гекс-літерах."""
+    for _ in range(20):
+        code = "БР-" + str(uuid.uuid4().int % 900_000 + 100_000)
+        if not conn.execute("SELECT 1 FROM bookings WHERE ref_code = ?", (code,)).fetchone():
+            return code
+    # практично недосяжно за життя демо; запасний варіант — довший номер
+    return "БР-" + str(uuid.uuid4().int % 90_000_000 + 10_000_000)
+
+
 def create_booking(
     check_in: str,
     check_out: str,
@@ -281,6 +304,7 @@ def create_booking(
 
     Перед записом ще раз перевіряє наявність (щоб не переброньувати).
     """
+    phone = normalize_phone(phone)
     avail = check_availability(check_in, check_out, room_type, guests)
     if avail.get("error"):
         return {"success": False, "error": avail["error"]}
@@ -289,10 +313,10 @@ def create_booking(
 
     key = avail["room_type"]
     total_price = avail["total_price"]
-    ref_code = "БР-" + uuid.uuid4().hex[:6].upper()
     booking_id = uuid.uuid4().hex
 
     with _connect() as conn:
+        ref_code = _generate_ref_code(conn)
         conn.execute(
             """
             INSERT INTO bookings
