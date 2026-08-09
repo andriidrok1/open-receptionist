@@ -1,11 +1,12 @@
-"""Наповнити hotel.db демо-бронями — щоб дашборд виглядав живим для показу.
+"""Наповнити базу закладу демо-записами — щоб дашборд виглядав живим для показу.
 
 Запуск:
-    python seed_demo.py           # очистити й засіяти ~130 броней за ~65 днів
-    python seed_demo.py --keep    # не чистити, лише додати
+    python seed_demo.py                    # готель: ~130 броней за ~65 днів
+    BUSINESS=clinic python seed_demo.py    # стоматологія: візити по сітці годин
+    python seed_demo.py --keep             # не чистити, лише додати
 
-Дані реалістичні, але вигадані. Для реального готелю просто не запускай цей скрипт —
-дашборд рахує з тих броней, що створив голосовий агент.
+Дані реалістичні, але вигадані. Для реального клієнта просто не запускай цей
+скрипт — дашборд рахує з тих записів, що створив голосовий агент.
 """
 
 import argparse
@@ -14,7 +15,8 @@ import sqlite3
 import uuid
 from datetime import date, datetime, timedelta
 
-import pms
+import crm
+from business import BUSINESS, slot_grid
 
 random.seed(42)  # відтворюваність
 
@@ -29,67 +31,98 @@ LAST = [
     "Марченко", "Савченко", "Руденко", "Мороз", "Кузьменко", "Пономаренко",
 ]
 
-ROOM_KEYS = list(pms.ROOM_TYPES.keys())
-# Ваги: стандарт/покращений частіше, люкс рідше
-WEIGHTS = [0.40, 0.32, 0.20, 0.08]
+BOOK = BUSINESS.booking
+# Перші позиції прайсу замовляють частіше за останні — інакше графік виручки
+# виходить рівний, а рівний графік на демо виглядає як заглушка.
+WEIGHTS = [0.40, 0.32, 0.20, 0.08, 0.05, 0.03][: len(BOOK.resources)]
 
 
 def _phone() -> str:
     op = random.choice(["67", "68", "50", "66", "63", "73", "97", "95"])
-    return f"+380 {op} {random.randint(100,999)} {random.randint(10,99)} {random.randint(10,99)}"
+    return f"+380 {op} {random.randint(100, 999)} {random.randint(10, 99)} {random.randint(10, 99)}"
+
+
+def _slot_span(created: datetime) -> tuple[str, str, int] | None:
+    """Випадковий вільний за графіком візит поблизу дати створення."""
+    res = random.choices(BOOK.resources, weights=WEIGHTS)[0]
+    for _ in range(20):
+        day = created.date() + timedelta(days=random.randint(0, 14))
+        grid = slot_grid(day)
+        if not grid:
+            continue
+        begin = random.choice(grid)
+        finish = begin + timedelta(minutes=res.duration_min)
+        hours = BOOK.hours_for(day)
+        if finish.time() > hours[1]:
+            continue
+        return (
+            begin.strftime("%Y-%m-%dT%H:%M"),
+            finish.strftime("%Y-%m-%dT%H:%M"),
+            res.price,
+        ), res.key
+    return None
+
+
+def _nights_span(created: datetime) -> tuple[tuple[str, str, int], str]:
+    res = random.choices(BOOK.resources, weights=WEIGHTS)[0]
+    nights = random.randint(1, 5)
+    # ~40% — майбутні брони (щоб була завантаженість), решта — історія.
+    if random.random() < 0.4:
+        check_in = date.today() + timedelta(days=random.randint(0, 30))
+    else:
+        check_in = created.date() + timedelta(days=random.randint(1, 10))
+    check_out = check_in + timedelta(days=nights)
+    return (check_in.isoformat(), check_out.isoformat(), res.price * nights), res.key
 
 
 def seed(n: int, keep: bool) -> None:
-    pms.init_db()
-    with sqlite3.connect(pms.DB_PATH) as conn:
+    crm.init_db()
+    with sqlite3.connect(crm.DB_PATH) as conn:
         if not keep:
             conn.execute("DELETE FROM bookings")
-        today = date.today()
+        made = 0
         for _ in range(n):
-            key = random.choices(ROOM_KEYS, weights=WEIGHTS)[0]
-            label, price, _total = pms.ROOM_TYPES[key]
-            guests = random.randint(1, 4)
-            nights = random.randint(1, 5)
-
-            # ~40% — майбутні/поточні броні (щоб була завантаженість), решта — історія.
-            days_back = random.randint(0, 65)
-            created_dt = datetime.now() - timedelta(days=days_back, hours=random.randint(0, 23))
-            if random.random() < 0.4:
-                check_in = today + timedelta(days=random.randint(0, 30))
-            else:
-                check_in = created_dt.date() + timedelta(days=random.randint(1, 10))
-            check_out = check_in + timedelta(days=nights)
-
+            created = datetime.now() - timedelta(
+                days=random.randint(0, 65), hours=random.randint(0, 23)
+            )
+            span = _slot_span(created) if BOOK.is_slots else _nights_span(created)
+            if not span:
+                continue
+            (starts_at, ends_at, price), key = span
             conn.execute(
                 """
                 INSERT INTO bookings
-                    (id, ref_code, room_type, check_in, check_out, guests,
-                     guest_name, phone, total_price, created_at)
+                    (id, ref_code, resource, starts_at, ends_at, party_size,
+                     customer_name, phone, total_price, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     uuid.uuid4().hex,
-                    "БР-" + uuid.uuid4().hex[:6].upper(),
+                    BOOK.ref_prefix + uuid.uuid4().hex[:6].upper(),
                     key,
-                    check_in.isoformat(),
-                    check_out.isoformat(),
-                    guests,
+                    starts_at,
+                    ends_at,
+                    random.randint(1, 4) if BOOK.ask_party else 1,
                     f"{random.choice(FIRST)} {random.choice(LAST)}",
                     _phone(),
-                    price * nights,
-                    created_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    price,
+                    created.strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
+            made += 1
         conn.commit()
 
-    total = pms.stats()
-    print(f"Засіяно. Броней за період: {total['kpi']['total_bookings']}, "
-          f"виручка: {total['kpi']['total_revenue']} грн")
+    total = crm.stats()
+    print(
+        f"{BUSINESS.key}: засіяно {made} записів у {crm.DB_PATH.name}. "
+        f"За період: {total['kpi']['total_bookings']}, "
+        f"виручка {total['kpi']['total_revenue']} {BUSINESS.currency}"
+    )
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--keep", action="store_true", help="не чистити наявні броні")
-    ap.add_argument("-n", type=int, default=130, help="скільки броней згенерувати")
+    ap.add_argument("--keep", action="store_true", help="не чистити наявні записи")
+    ap.add_argument("-n", type=int, default=130, help="скільки записів згенерувати")
     args = ap.parse_args()
     seed(args.n, args.keep)

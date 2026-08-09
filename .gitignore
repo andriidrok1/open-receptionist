@@ -221,8 +221,8 @@ __marimo__/
 
 # Node.js (client/)
 
-# Local fake-PMS SQLite DB
-server/hotel.db
+# Локальні бази закладів (демо-дані, не код)
+server/*.db
 *.db
 
 # voice_lab: згенеровані mp3 та мапа доданих у колекцію голосів

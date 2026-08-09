@@ -4,7 +4,11 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-"""hotel-voice-agent — Голосовий ІІ-ресепшн для готелю (українською).
+"""voice-receptionist — Голосовий ІІ-ресепшн українською для будь-якого закладу.
+
+Цей файл — тільки транспорт і голос: ані готелю, ані клініки він не знає. Хто
+на тому кінці дроту, задає YAML у `businesses/` (див. business.py), а що агент
+уміє робити — agent_tools.py. Запустити для іншого закладу = BUSINESS=clinic.
 
 Cascade pipeline:
     мікрофон → [Silero VAD] → STT (uk) → OpenAI LLM → ElevenLabs TTS → динамік
@@ -15,18 +19,18 @@ STT перемикається через STT_PROVIDER:
     openai — gpt-4o-transcribe із серверним VAD (запасний).
 
 Запуск:
-    python bot.py
+    python bot.py                 # готель (за замовчуванням)
+    BUSINESS=clinic python bot.py # стоматологія
 потім відкрий http://localhost:7860/client і натисни Connect (дозволь мікрофон).
 """
 
 import os
-from datetime import date
 
-import pms
+import agent_tools
+import crm
+from business import BUSINESS, build_system_prompt, greeting_hint
 from dotenv import load_dotenv
 from loguru import logger
-from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.frames.frames import (
     Frame,
     LLMRunFrame,
@@ -60,7 +64,6 @@ from pipecat.runner.utils import create_transport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService, CommitStrategy
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
-from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.stt import OpenAIRealtimeSTTService
 from pipecat.services.openai.tts import OpenAITTSService
@@ -70,195 +73,6 @@ from pipecat.workers.runner import WorkerRunner
 from speech_text import UkrainianSpeechFilter
 
 load_dotenv(override=True)
-
-# Назва готелю — міняй тут (потрапляє в системний промпт і привітання).
-HOTEL_NAME = os.getenv("HOTEL_NAME", "готель «Дніпро»")
-
-# Системний промпт: персона ресепшена + інструкції з роботи з інструментами.
-# Фаза 2: агент реально перевіряє наявність і створює бронь через function calling.
-def build_system_prompt() -> str:
-    today = date.today().isoformat()
-    return f"""Ти — Оксана, адміністратор на ресепшені ({HOTEL_NAME}).
-Розмовляй природною українською мовою.
-
-ГОВОРИ, А НЕ ПИШИ. Твій текст читає синтезатор мовлення, і він озвучує саме те,
-як написано: кожна кома — це пауза. Тому фрази з письмової мови звучать
-роботизовано, скільки б їх не «оживляли» налаштуваннями голосу.
-
-Погано (так пишуть): «Отже, номер Покращений на двох, з чотирнадцятого по
-сімнадцяте липня, три ночі. Разом п'ять тисяч чотириста гривень.
-Підтверджуєте бронювання?»
-Добре (так говорять): «Так, дивлюся — Покращений на двох є, з чотирнадцятого
-по сімнадцяте. Три ночі, п'ять тисяч чотириста. Бронюємо?»
-
-Правила усного мовлення:
-- Не нанизуй усе через коми. Коротка фраза, крапка, наступна фраза.
-- Викидай канцелярит: «Отже», «Разом становить», «Підтверджуєте бронювання?»,
-  «Чи можу я вам допомогти». Кажи як людина: «Так», «Дивлюся», «Є»,
-  «Добре», «Бронюємо?». Прохання формулюй прохінням, а не питанням про себе:
-  «Підкажіть ваше ім'я та телефон», НЕ «Записала ім'я та телефон?».
-- Тире й три крапки — твої інструменти інтонації: «Три ночі — п'ять тисяч
-  чотириста», «Зараз гляну...».
-- Числа, дати й ціни — тільки словами, ніколи цифрами. Як саме промовити
-  число, вирішуй сама, за живою мовою: «п'ять тисяч чотириста», «сімсот
-  сімдесят сім», «чотирнадцятого липня». Головне — щоб це легко впізнавалось
-  на слух, а не було ланцюжком окремих цифр.
-- Не дроби думку на обрубки й не повторюй те саме двома способами.
-- В одній репліці МАКСИМУМ ОДНЕ питання. Ніколи не став два питання поспіль.
-- Без порожніх вступів («Дякую за інформацію») — одразу суть.
-- Ніяких емодзі, списків, дужок, зірочок — лише те, що можна вимовити.
-
-Якщо в репліці потрібна відчутна пауза (перед ціною, між блоками цифр
-телефону) — постав тег <break time="0.4s" />. МАКСИМУМ ДВА такі теги на
-репліку, інакше мовлення розганяється. Здебільшого досить крапки або тире.
-
-Будь теплою й доброзичливою, але по суті.
-
-НІКОЛИ не оголошуй перевірку окремою реплікою і не чекай згоди гостя на неї.
-Якщо в тебе вже є дати, тип номера і кількість гостей — ВИКЛИКАЙ інструмент
-у цьому ж ході, без фраз «зараз перевірю, мить» з подальшим мовчанням. Гість
-не мусить нічого відповідати, щоб перевірка відбулася.
-
-Сьогодні {today}. Коли гість називає дату усно («чотирнадцятого липня», «на
-наступних вихідних»), сам переведи її у формат РРРР-ММ-ДД. Якщо рік не названо —
-бери найближчий майбутній.
-
-Номери й ціни за ніч: Стандарт — 1200 грн, Покращений — 1800 грн, Делюкс —
-2800 грн, Люкс — 4500 грн. Заїзд з 14:00, виїзд до 12:00. Сніданок включено,
-паркінг безкоштовний.
-
-БРОНЮВАННЯ — працюй тільки через інструменти, не вигадуй наявність і ціни сам:
-1. Збери по черзі: дати заїзду і виїзду, тип номера, кількість гостей.
-   Якщо гість уже чітко назвав щось із цього («з чотирнадцятого по сімнадцяте
-   липня, на двох») — НЕ перепитуй це окремо, одразу переходь до перевірки.
-   Питай лише те, чого справді бракує.
-2. Виклич check_availability, щоб дізнатися наявність і повну вартість. Назви їх гостю.
-3. Якщо вільно і гість згоден — попроси ім'я та номер телефону. Телефон
-   ОБОВ'ЯЗКОВО повтори вголос, але промовляй його так, як це роблять люди —
-   групами, а не по одній цифрі: 0632096974 — «нуль шістдесят три
-   <break time="0.4s" /> двісті дев'ять <break time="0.4s" /> шістдесят дев'ять
-   сімдесят чотири». Сама вирішуй, як розбити номер на групи, аби його було
-   легко впізнати на слух. Ланцюжок окремих цифр звучить монотонно, і гість у
-   ньому губиться. Спитай, чи правильно записала, і дочекайся підтвердження.
-   В інструмент передавай номер ЦИФРАМИ (0632096974), а не словами.
-   Якщо гість виправляє — повтори виправлений номер так само, групами.
-   Якщо інструмент повернув помилку про кількість цифр — не сперечайся й не
-   вигадуй номер: перепитай його в гостя ще раз.
-4. Перед створенням броні ОБОВ'ЯЗКОВО повтори вголос деталі разом: тип
-   номера, дати заїзду і виїзду, кількість гостей, ім'я та повну вартість
-   («Записую Покращений на двох, з чотирнадцятого по сімнадцяте липня, на
-   Тараса. Три ночі <break time="0.4s" /> п'ять тисяч чотириста. Все вірно?»).
-   Телефон тут повторно НЕ називай — його вже підтвердили на кроці 3.
-   НЕ скорочуй це до одного питання про ціну — гість має почути всю бронь.
-5. ТІЛЬКИ після усного «так» на повний переказ броні виклич create_booking.
-   Потім назви гостю номер броні (ref_code) чітко, як звичайне число, і подякуй
-   — усе одним плавним реченням.
-Якщо номерів немає — вибачся і запропонуй інші дати або інший тип номера.
-
-Якщо питання поза межами бронювання (спа, тварини, банкети, скарги тощо) —
-чесно скажи, що уточниш у адміністратора і він передзвонить. Попроси ім'я та
-телефон (телефон теж повтори по цифрах) і виклич take_message. НЕ вигадуй
-відповідь і не кажи «записала», доки інструмент не підтвердив запис."""
-
-
-# --- Function-calling tools: агент реально ходить у PMS ---
-
-_ROOM_TYPE_ENUM = ["Стандарт", "Покращений", "Делюкс", "Люкс"]
-
-
-async def _handle_check_availability(params: FunctionCallParams) -> None:
-    a = params.arguments
-    result = pms.check_availability(
-        check_in=a.get("check_in_date"),
-        check_out=a.get("check_out_date"),
-        room_type=a.get("room_type"),
-        guests=int(a.get("guests") or 1),
-    )
-    logger.info(f"[tool] check_availability({dict(a)}) -> {result}")
-    await params.result_callback(result)
-
-
-async def _handle_create_booking(params: FunctionCallParams) -> None:
-    a = params.arguments
-    result = pms.create_booking(
-        check_in=a.get("check_in_date"),
-        check_out=a.get("check_out_date"),
-        room_type=a.get("room_type"),
-        guests=int(a.get("guests") or 1),
-        guest_name=a.get("guest_name"),
-        phone=a.get("phone"),
-    )
-    logger.info(f"[tool] create_booking({dict(a)}) -> {result}")
-    await params.result_callback(result)
-
-
-CHECK_AVAILABILITY_SCHEMA = FunctionSchema(
-    name="check_availability",
-    description=(
-        "Перевірити наявність номера і повну вартість на конкретні дати. "
-        "Виклич перед тим, як називати гостю ціну або підтверджувати бронь."
-    ),
-    properties={
-        "check_in_date": {"type": "string", "description": "Дата заїзду у форматі РРРР-ММ-ДД"},
-        "check_out_date": {"type": "string", "description": "Дата виїзду у форматі РРРР-ММ-ДД"},
-        "room_type": {"type": "string", "enum": _ROOM_TYPE_ENUM, "description": "Тип номера"},
-        "guests": {"type": "integer", "description": "Кількість гостей"},
-    },
-    required=["check_in_date", "check_out_date", "room_type", "guests"],
-)
-
-CREATE_BOOKING_SCHEMA = FunctionSchema(
-    name="create_booking",
-    description=(
-        "Створити бронювання в системі готелю. Виклич ТІЛЬКИ після того, як ти вголос "
-        "повторила гостю ВСІ деталі броні (тип номера, дати, кількість гостей, ім'я, "
-        "телефон, повну вартість) і гість явно підтвердив («так»)."
-    ),
-    properties={
-        "check_in_date": {"type": "string", "description": "Дата заїзду у форматі РРРР-ММ-ДД"},
-        "check_out_date": {"type": "string", "description": "Дата виїзду у форматі РРРР-ММ-ДД"},
-        "room_type": {"type": "string", "enum": _ROOM_TYPE_ENUM, "description": "Тип номера"},
-        "guests": {"type": "integer", "description": "Кількість гостей"},
-        "guest_name": {"type": "string", "description": "Ім'я гостя"},
-        "phone": {
-            "type": "string",
-            "description": "Номер телефону ВИКЛЮЧНО цифрами, напр. 0671234567. "
-            "Ніколи не передавай словами ('нуль шість сім') — тільки цифри.",
-        },
-    },
-    required=["check_in_date", "check_out_date", "room_type", "guests", "guest_name", "phone"],
-)
-
-
-async def _handle_take_message(params: FunctionCallParams) -> None:
-    a = params.arguments
-    result = pms.take_message(
-        guest_name=a.get("guest_name"),
-        phone=a.get("phone"),
-        topic=a.get("topic"),
-    )
-    logger.info(f"[tool] take_message({dict(a)}) -> {result}")
-    await params.result_callback(result)
-
-
-TAKE_MESSAGE_SCHEMA = FunctionSchema(
-    name="take_message",
-    description=(
-        "Записати запит на зворотний дзвінок від адміністратора. Виклич, коли питання "
-        "гостя поза межами бронювання і ти пообіцяла, що адміністратор передзвонить. "
-        "Спершу дізнайся ім'я та телефон гостя."
-    ),
-    properties={
-        "guest_name": {"type": "string", "description": "Ім'я гостя"},
-        "phone": {
-            "type": "string",
-            "description": "Телефон для зворотного дзвінка ВИКЛЮЧНО цифрами, напр. 0671234567. "
-            "Ніколи не передавай словами — тільки цифри.",
-        },
-        "topic": {"type": "string", "description": "Суть питання гостя, одним-двома реченнями"},
-    },
-    required=["guest_name", "phone", "topic"],
-)
 
 
 class ServerVADSpeechTimeoutStopStrategy(SpeechTimeoutUserTurnStopStrategy):
@@ -290,8 +104,8 @@ class ServerVADSpeechTimeoutStopStrategy(SpeechTimeoutUserTurnStopStrategy):
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     """Run the voice bot for this session."""
-    logger.info("Starting hotel receptionist bot (uk)")
-    pms.init_db()
+    logger.info(f"Starting voice receptionist (uk) — {BUSINESS.key}: {BUSINESS.name}")
+    crm.init_db()
 
     api_key = os.getenv("OPENAI_API_KEY")
     elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
@@ -312,8 +126,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             settings=ElevenLabsRealtimeSTTService.Settings(
                 model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime"),
                 language=Language.UK,
-                # keyterms підвищують точність доменних слів (типи номерів тощо).
-                keyterms=_ROOM_TYPE_ENUM + ["бронювання", "заїзд", "виїзд", "готель"],
+                # keyterms підвищують точність доменних слів (назви послуг тощо)
+                # — беруться з конфігу закладу, бо в кожній галузі вони свої.
+                keyterms=BUSINESS.stt_keyterms(),
             ),
         )
         # Локальний VAD: він і сегментує мовлення для STT, і дає межі ходу.
@@ -389,15 +204,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             extra={"parallel_tool_calls": False},
         ),
     )
-    # Прив'язати хендлери до імен інструментів.
-    llm.register_function("check_availability", _handle_check_availability)
-    llm.register_function("create_booking", _handle_create_booking)
-    llm.register_function("take_message", _handle_take_message)
-
-    tools = ToolsSchema(
-        standard_tools=[CHECK_AVAILABILITY_SCHEMA, CREATE_BOOKING_SCHEMA, TAKE_MESSAGE_SCHEMA]
-    )
-    context = LLMContext(tools=tools)
+    # Набір інструментів і їх хендлери збирає agent_tools із конфігу закладу:
+    # довідковому ресепшену дістанеться лише take_message, готелю — ще й броні.
+    agent_tools.register(llm, logger)
+    context = LLMContext(tools=agent_tools.tools_schema())
     # Стратегії ходу задаємо ЯВНО (дефолтний TurnAnalyzer = smart-turn модель,
     # яка в нашій зв'язці не бачила межі мовлення і закривала хід таймаутом ~2с).
     # SpeechTimeout закриває хід за 0.7с після фінального транскрипта.
@@ -449,16 +259,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     worker = PipelineWorker(pipeline, params=pipeline_params, observers=[])
 
     async def greet_first() -> None:
-        """Перше слово — за агентом: коротке привітання українською."""
-        context.add_message(
-            {
-                "role": "developer",
-                "content": (
-                    f"Привітайся першою, дуже коротко, як адміністратор {HOTEL_NAME}, "
-                    "і запитай, чим можеш допомогти."
-                ),
-            }
-        )
+        """Перше слово — за агентом: коротке привітання від імені закладу."""
+        context.add_message({"role": "developer", "content": greeting_hint()})
         await worker.queue_frames([LLMRunFrame()])
 
     # У браузері вітаємось, коли RTVI-клієнт готовий. У телефонії RTVI-клієнта

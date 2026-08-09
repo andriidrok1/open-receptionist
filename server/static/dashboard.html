@@ -176,9 +176,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
         Огляд
       </a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg> Броні</a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M3 21V7l9-4 9 4v14"/><path d="M9 21v-6h6v6"/></svg> Номери</a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/></svg> Гості</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg> <span id="navAction">Записи</span></a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M3 21V7l9-4 9 4v14"/><path d="M9 21v-6h6v6"/></svg> <span id="navResource">Послуги</span></a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/></svg> <span id="navCustomer">Клієнти</span></a>
       <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/></svg> Дзвінки</a>
       <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Фінанси</a>
       <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z"/></svg> Налаштування</a>
@@ -201,7 +201,7 @@
     <div class="topbar">
       <div>
         <h1 class="h1">Дашборд</h1>
-        <div class="sub">Огляд роботи голосового агента та бронювань</div>
+        <div class="sub" id="subTitle">Огляд роботи голосового агента</div>
       </div>
       <div class="pills">
         <div class="pill pill-agent"><span class="dot"></span><div><div class="strong" id="pillAgent">Оксана · онлайн</div><div class="tiny">Голосовий агент активний</div></div></div>
@@ -214,18 +214,19 @@
 
     <section class="grid2">
       <div class="card">
-        <div class="card-h"><div class="card-title">Завантаження по типах номерів</div></div>
-        <div class="occ-head"><div>Тип номера</div><div></div><div style="text-align:right">Заброньовано</div><div style="text-align:right">Всього</div></div>
+        <div class="card-h"><div class="card-title" id="occTitle">Завантаження</div></div>
+        <div class="occ-head"><div id="occCol">Варіант</div><div></div><div style="text-align:right">Зайнято</div><div style="text-align:right">Всього</div></div>
         <div id="occ"></div>
         <div class="legend">
-          <span><i style="background:var(--good)"></i>Є вільні номери</span>
+          <span><i style="background:var(--good)"></i>Є вільні місця</span>
           <span><i style="background:var(--warn)"></i>Мало вільних</span>
           <span><i style="background:var(--crit)"></i>Немає вільних</span>
+          <span><i style="background:var(--muted)"></i>Сьогодні зачинено</span>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-h"><div class="card-title">Виручка по типах номерів (грн)</div></div>
+        <div class="card-h"><div class="card-title" id="revTitle">Виручка</div></div>
         <div class="chart">
           <div class="yaxis" id="yaxis"></div>
           <div class="plotwrap">
@@ -237,14 +238,10 @@
     </section>
 
     <section class="card" style="margin-top:18px">
-      <div class="card-h"><div class="card-title">Бронювання</div><button class="btn-ghost">Переглянути всі брони</button></div>
+      <div class="card-h"><div class="card-title" id="tableTitle">Записи</div><button class="btn-ghost" id="tableBtn">Переглянути всі</button></div>
       <div class="tablewrap">
         <table>
-          <thead><tr>
-            <th>№ броні</th><th>Гість</th><th>Телефон</th><th>Тип номера</th>
-            <th>Дати заїзду <span class="arrow">→</span> виїзду</th><th>Ночей</th><th>Гостей</th>
-            <th>Сума (грн)</th><th>Створено</th>
-          </tr></thead>
+          <thead><tr id="thead"></tr></thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
@@ -257,7 +254,7 @@
       </div>
       <div class="tablewrap">
         <table>
-          <thead><tr><th>Гість</th><th>Телефон</th><th>Питання</th><th>Отримано</th></tr></thead>
+          <thead><tr><th id="msgWho">Клієнт</th><th>Телефон</th><th>Питання</th><th>Отримано</th></tr></thead>
           <tbody id="msgRows"></tbody>
         </table>
       </div>
@@ -269,32 +266,44 @@
 const nf = new Intl.NumberFormat("uk-UA");
 const el = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
 
-const STATUS = { good: "var(--good)", warning: "var(--warn)", critical: "var(--crit)" };
-const BADGE = {
-  standard: ["#eef1ff", "#5566d8"],
-  superior: ["#e7f0fe", "#2f79d6"],
-  deluxe:   ["#fff1e3", "#e08636"],
-  suite:    ["#fde9e9", "#dc4b4b"],
-};
-const MONTHS = ["січ.","лют.","бер.","квіт.","трав.","черв.","лип.","серп.","вер.","жовт.","лист.","груд."];
-const fmtDate = (iso) => { const d = new Date(iso); return `${String(d.getDate()).padStart(2,"0")}.${String(d.getMonth()+1).padStart(2,"0")}.${d.getFullYear()}`; };
-const fmtRange = (a,b) => { const d1=new Date(a), d2=new Date(b); return `${d1.getDate()} ${MONTHS[d1.getMonth()]} – ${d2.getDate()} ${MONTHS[d2.getMonth()]} ${d2.getFullYear()}`; };
-const fmtCreated = (s) => { const d = new Date(s.replace(" ","T")); return `${fmtDate(d)}, ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
-
-const KPI_META = [
-  { key: "total_bookings", label: "Броней всього", color: "#6c8cf5", fmt: (v)=>nf.format(v),
-    icon: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>' },
-  { key: "total_revenue", label: "Виручка (грн)", color: "#22b07d", fmt: (v)=>nf.format(v),
-    icon: '<rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M2 10h20"/><circle cx="17" cy="14" r="1.4"/>' },
-  { key: "total_guests", label: "Гостей прийнято", color: "#f0913a", fmt: (v)=>nf.format(v),
-    icon: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/>' },
-  { key: "avg_check", label: "Середній чек (грн)", color: "#7c6cf0", fmt: (v)=>nf.format(v),
-    icon: '<rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 9h20"/><path d="M6 15h4"/>' },
+const STATUS = { good: "var(--good)", warning: "var(--warn)", critical: "var(--crit)", closed: "var(--muted)" };
+// Кольори бейджів роздаються по порядку ресурсів у конфігу — щоб нова галузь
+// не вимагала правити фронт.
+const PALETTE = [
+  ["#eef1ff", "#5566d8"], ["#e7f0fe", "#2f79d6"], ["#fff1e3", "#e08636"],
+  ["#fde9e9", "#dc4b4b"], ["#e8f7ee", "#2f9e5e"], ["#f3ecfd", "#7b5bd6"],
 ];
+const MONTHS = ["січ.","лют.","бер.","квіт.","трав.","черв.","лип.","серп.","вер.","жовт.","лист.","груд."];
+const pad = (n) => String(n).padStart(2, "0");
+const fmtDate = (iso) => { const d = new Date(iso); return `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()}`; };
+const fmtTime = (iso) => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const fmtRange = (a,b) => { const d1=new Date(a), d2=new Date(b); return `${d1.getDate()} ${MONTHS[d1.getMonth()]} – ${d2.getDate()} ${MONTHS[d2.getMonth()]} ${d2.getFullYear()}`; };
+const fmtCreated = (s) => { const d = new Date(s.replace(" ","T")); return `${fmtDate(d)}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+let BIZ = { currency: "грн", is_slots: false, labels: {} };
+let RESOURCE_COLOR = {};
+
+function kpiMeta() {
+  const cur = BIZ.currency;
+  const meta = [
+    { key: "total_bookings", label: `${BIZ.labels.action || "Записів"} всього`, color: "#6c8cf5",
+      icon: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>' },
+    { key: "total_revenue", label: `Виручка (${cur})`, color: "#22b07d",
+      icon: '<rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M2 10h20"/><circle cx="17" cy="14" r="1.4"/>' },
+  ];
+  // «Гостей прийнято» має сенс лише там, де питають кількість людей.
+  if (BIZ.labels.party) meta.push(
+    { key: "total_people", label: `${BIZ.labels.party} всього`, color: "#f0913a",
+      icon: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/>' });
+  meta.push(
+    { key: "avg_check", label: `Середній чек (${cur})`, color: "#7c6cf0",
+      icon: '<rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 9h20"/><path d="M6 15h4"/>' });
+  return meta;
+}
 
 function renderKPIs(kpi, deltas) {
   const box = document.getElementById("kpis"); box.innerHTML = "";
-  for (const m of KPI_META) {
+  for (const m of kpiMeta()) {
     const d = deltas[m.key];
     let delta = '<span style="color:var(--muted)">немає даних за минулий період</span>';
     if (d !== null && d !== undefined) {
@@ -309,44 +318,44 @@ function renderKPIs(kpi, deltas) {
         </div>
         <div>
           <div class="kpi-label">${m.label}</div>
-          <div class="kpi-val">${m.fmt(kpi[m.key])}</div>
+          <div class="kpi-val">${nf.format(kpi[m.key])}</div>
           <div class="kpi-delta">${delta}</div>
         </div>
       </div>`));
   }
 }
 
-function renderOccupancy(byType) {
+function renderOccupancy(rows) {
   const box = document.getElementById("occ"); box.innerHTML = "";
-  for (const t of byType) {
+  for (const t of rows) {
     box.appendChild(el(`
       <div class="occ-row">
         <div class="occ-name">${t.label}</div>
-        <div class="occ-track"><div class="occ-fill" style="width:${t.occupancy_pct}%;background:${STATUS[t.status]}"></div></div>
-        <div class="occ-count">${t.booked} / ${t.total_rooms}</div>
+        <div class="occ-track"><div class="occ-fill" style="width:${Math.min(t.occupancy_pct,100)}%;background:${STATUS[t.status]}"></div></div>
+        <div class="occ-count">${t.booked} / ${t.capacity}</div>
         <div class="occ-pct" style="color:${STATUS[t.status]}">${t.occupancy_pct}%</div>
       </div>`));
   }
 }
 
-function renderChart(byType) {
-  const max = Math.max(1, ...byType.map(t => t.revenue));
-  // nice max up to a round тис.
-  const step = Math.max(50000, Math.ceil(max / 4 / 50000) * 50000);
+function renderChart(rows) {
+  const max = Math.max(1, ...rows.map(t => t.revenue));
+  const unit = max > 200000 ? 50000 : max > 20000 ? 5000 : 500;
+  const step = Math.max(unit, Math.ceil(max / 4 / unit) * unit);
   const niceMax = step * 4;
   const yaxis = document.getElementById("yaxis"); yaxis.innerHTML = "";
   const grid = document.getElementById("grid"); grid.innerHTML = "";
   for (let i = 4; i >= 0; i--) {
     const val = step * i;
-    yaxis.appendChild(el(`<div>${val === 0 ? "0" : (val/1000)+" тис."}</div>`));
+    yaxis.appendChild(el(`<div>${val === 0 ? "0" : (val >= 1000 ? (val/1000)+" тис." : val)}</div>`));
     grid.appendChild(el(`<div class="gridline" style="top:${(1 - i/4)*100}%"></div>`));
   }
   const bars = document.getElementById("bars"); bars.innerHTML = "";
   const xaxis = document.getElementById("xaxis"); xaxis.innerHTML = "";
-  for (const t of byType) {
+  for (const t of rows) {
     const h = (t.revenue / niceMax) * 100;
     bars.appendChild(el(`
-      <div class="barcol" title="${t.label}: ${nf.format(t.revenue)} грн">
+      <div class="barcol" title="${t.label}: ${nf.format(t.revenue)} ${BIZ.currency}">
         <div class="barval">${nf.format(t.revenue)}</div>
         <div class="bar" style="height:${h}%"></div>
       </div>`));
@@ -354,26 +363,44 @@ function renderChart(byType) {
   }
 }
 
+function tableColumns() {
+  const L = BIZ.labels;
+  const cols = [`№`, L.customer || "Клієнт", "Телефон", L.resource || "Варіант"];
+  cols.push(BIZ.is_slots ? "Дата й час" : `Дати <span class="arrow">→</span>`);
+  cols.push(BIZ.is_slots ? "Тривалість" : L.unit || "Одиниць");
+  if (L.party) cols.push(L.party);
+  cols.push(`Сума (${BIZ.currency})`, "Створено");
+  return cols;
+}
+
 function renderTable(bookings) {
+  document.getElementById("thead").innerHTML =
+    tableColumns().map(c => `<th>${c}</th>`).join("");
   const rows = document.getElementById("rows"); rows.innerHTML = "";
-  const view = bookings.slice(0, 5);
-  for (const b of view) {
-    const [bg, fg] = BADGE[b.room_type] || ["#eee", "#555"];
+  for (const b of bookings.slice(0, 5)) {
+    const [bg, fg] = RESOURCE_COLOR[b.resource] || ["#eee", "#555"];
+    const when = BIZ.is_slots
+      ? `${fmtDate(b.starts_at)}, ${fmtTime(b.starts_at)}`
+      : `${fmtDate(b.starts_at)}<span class="arrow">→</span>${fmtDate(b.ends_at)}`;
+    const amount = BIZ.is_slots
+      ? `${Math.round((new Date(b.ends_at) - new Date(b.starts_at)) / 60000)} хв`
+      : b.units;
+    const party = BIZ.labels.party ? `<td class="num">${b.party_size}</td>` : "";
     rows.appendChild(el(`
       <tr>
         <td class="ref">${b.ref_code}</td>
-        <td>${b.guest_name}</td>
+        <td>${b.customer_name}</td>
         <td class="num">${b.phone}</td>
-        <td><span class="badge" style="background:${bg};color:${fg}">${b.room_type_label}</span></td>
-        <td class="dates num">${fmtDate(b.check_in)}<span class="arrow">→</span>${fmtDate(b.check_out)}</td>
-        <td class="num">${b.nights}</td>
-        <td class="num">${b.guests}</td>
+        <td><span class="badge" style="background:${bg};color:${fg}">${b.resource_label}</span></td>
+        <td class="dates num">${when}</td>
+        <td class="num">${amount}</td>
+        ${party}
         <td class="num" style="font-weight:600">${nf.format(b.total_price)}</td>
         <td class="dates num">${fmtCreated(b.created_at)}</td>
       </tr>`));
   }
   document.getElementById("tcount").textContent =
-    `Показано ${view.length} з ${bookings.length} бронювань`;
+    `Показано ${Math.min(bookings.length, 5)} з ${bookings.length}`;
 }
 
 function renderMessages(messages) {
@@ -385,7 +412,7 @@ function renderMessages(messages) {
   for (const m of list.slice(0, 8)) {
     rows.appendChild(el(`
       <tr>
-        <td style="font-weight:600">${m.guest_name}</td>
+        <td style="font-weight:600">${m.customer_name}</td>
         <td class="num">${m.phone}</td>
         <td style="white-space:normal;max-width:420px">${m.topic}</td>
         <td class="dates num">${fmtCreated(m.created_at)}</td>
@@ -393,20 +420,36 @@ function renderMessages(messages) {
   }
 }
 
+function applyBusiness(biz) {
+  BIZ = biz;
+  const L = biz.labels || {};
+  document.getElementById("brandName").textContent = (biz.brand || "").toUpperCase();
+  document.getElementById("brandCity").textContent = biz.city || "";
+  document.getElementById("agentName").textContent = biz.agent;
+  document.getElementById("pillAgent").textContent = `${biz.agent} · онлайн`;
+  document.getElementById("navAction").textContent = L.action || "Записи";
+  document.getElementById("navResource").textContent = L.resource || "Варіанти";
+  document.getElementById("navCustomer").textContent = L.customer || "Клієнти";
+  document.getElementById("msgWho").textContent = L.customer || "Клієнт";
+  document.getElementById("occTitle").textContent = L.occupancy || "Завантаження";
+  document.getElementById("occCol").textContent = L.resource || "Варіант";
+  document.getElementById("revTitle").textContent = `Виручка (${biz.currency})`;
+  document.getElementById("tableTitle").textContent = L.action || "Записи";
+  document.getElementById("subTitle").textContent =
+    `Огляд роботи голосового агента · ${biz.brand}`;
+  document.title = `${biz.brand} · голосовий агент`;
+}
+
 async function load() {
   const r = await fetch("/api/stats");
   const s = await r.json();
-  if (s.hotel) {
-    document.getElementById("brandName").textContent = s.hotel.name.toUpperCase();
-    document.getElementById("brandCity").textContent = s.hotel.city;
-    document.getElementById("agentName").textContent = s.hotel.agent;
-    document.getElementById("pillAgent").textContent = `${s.hotel.agent} · онлайн`;
-  }
+  if (s.business) applyBusiness(s.business);
+  s.by_resource.forEach((t, i) => { RESOURCE_COLOR[t.resource] = PALETTE[i % PALETTE.length]; });
   document.getElementById("pillRange").textContent = fmtRange(s.period_start, s.period_end);
   document.getElementById("pillUpd").textContent = "щойно";
   renderKPIs(s.kpi, s.deltas);
-  renderOccupancy(s.by_type);
-  renderChart(s.by_type);
+  renderOccupancy(s.by_resource);
+  renderChart(s.by_resource);
   renderTable(s.bookings);
   renderMessages(s.messages);
 }

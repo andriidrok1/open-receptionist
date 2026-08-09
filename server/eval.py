@@ -1,30 +1,50 @@
 """Текстовий eval голосового агента: ганяє діалогові сценарії проти реального OpenAI.
 
-Використовує ТОЙ САМИЙ системний промпт, ті самі tools і PMS, що й bot.py.
-Різниця з живим дзвінком лише в тому, що немає STT/TTS — вхід/вихід текстом.
-Тому тут перевіряється ЛОГІКА (дати, ціни, підтвердження, tools), а не голос.
-Голосові речі (перебивання T7, шум T9, якість вимови) — тільки вручну через мікрофон.
+Використовує ТОЙ САМИЙ системний промпт, ті самі tools і те саме сховище, що й
+bot.py. Різниця з живим дзвінком лише в тому, що немає STT/TTS — вхід/вихід
+текстом. Тому тут перевіряється ЛОГІКА (дати, ціни, підтвердження, tools), а не
+голос. Голосове (перебивання, шум, вимова) — тільки вручну через мікрофон.
+
+Сценарії свої для кожного закладу: у готелю це інтервал діб, у клініки — час
+візиту й вільні вікна. Спільне ядро (промпт, інструменти, телефон) перевіряють
+обидва набори — саме так ловиться регресія від правки «під одну галузь».
 
 Використання:
-    python eval.py            # всі сценарії
-    python eval.py T3 T6      # тільки вибрані
+    python eval.py                       # усі сценарії активного закладу
+    python eval.py T3 T6                 # тільки вибрані
+    python eval.py --business clinic     # сценарії стоматології
+    python eval.py --business all        # всі заклади поспіль
 
 Потребує OPENAI_API_KEY у server/.env (кожен сценарій = кілька центів API).
-Тестові дані пишуться в hotel.db з ім'ям «…Тестовий» і чистяться перед запуском.
+Тестові дані пишуться з ім'ям «…Тестовий» і чистяться до й після прогону.
+
+Дати в репліках рахуються від сьогодні й проговорюються словами — інакше eval
+протухає разом із захардкодженим липнем.
 """
 
 import json
+import os
 import re
 import sqlite3
 import sys
+from datetime import date, timedelta
 
-import pms
-import bot  # noqa: E402 — тягне load_dotenv і схеми tools
-from openai import OpenAI
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter
+# --business треба обробити ДО імпорту business.py: заклад обирається на імпорті.
+_ARGV = sys.argv[1:]
+if "--business" in _ARGV:
+    i = _ARGV.index("--business")
+    _BUSINESS_ARG = _ARGV[i + 1]
+    del _ARGV[i : i + 2]
+else:
+    _BUSINESS_ARG = None
+if _BUSINESS_ARG and _BUSINESS_ARG != "all":
+    os.environ["BUSINESS"] = _BUSINESS_ARG
 
-import os
+import agent_tools  # noqa: E402
+import crm  # noqa: E402
+from business import BUSINESS, build_system_prompt  # noqa: E402
+from openai import OpenAI  # noqa: E402
+from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: E402
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 MAX_STEPS = 30  # запобіжник від зациклення діалогу
@@ -32,47 +52,84 @@ MAX_STEPS = 30  # запобіжник від зациклення діалог�
 _digits = lambda s: re.sub(r"\D", "", s or "")  # noqa: E731
 
 
-def _call_tool(name: str, a: dict) -> dict:
-    """Ті самі PMS-функції, що викликають хендлери в bot.py."""
-    if name == "check_availability":
-        return pms.check_availability(
-            a.get("check_in_date"), a.get("check_out_date"),
-            a.get("room_type"), int(a.get("guests") or 1))
-    if name == "create_booking":
-        return pms.create_booking(
-            a.get("check_in_date"), a.get("check_out_date"),
-            a.get("room_type"), int(a.get("guests") or 1),
-            a.get("guest_name"), a.get("phone"))
-    if name == "take_message":
-        return pms.take_message(a.get("guest_name"), a.get("phone"), a.get("topic"))
-    return {"error": f"невідомий інструмент {name}"}
+# --------------------- дати й час словами (укр.) ---------------------
+
+_ORD_GEN = [
+    "", "першого", "другого", "третього", "четвертого", "п'ятого", "шостого",
+    "сьомого", "восьмого", "дев'ятого", "десятого", "одинадцятого", "дванадцятого",
+    "тринадцятого", "чотирнадцятого", "п'ятнадцятого", "шістнадцятого",
+    "сімнадцятого", "вісімнадцятого", "дев'ятнадцятого", "двадцятого",
+    "двадцять першого", "двадцять другого", "двадцять третього", "двадцять четвертого",
+    "двадцять п'ятого", "двадцять шостого", "двадцять сьомого", "двадцять восьмого",
+    "двадцять дев'ятого", "тридцятого", "тридцять першого",
+]
+_MONTH_GEN = [
+    "", "січня", "лютого", "березня", "квітня", "травня", "червня",
+    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+]
+_HOUR_LOC = {
+    9: "дев'ятій", 10: "десятій", 11: "одинадцятій", 12: "дванадцятій",
+    13: "тринадцятій", 14: "чотирнадцятій", 15: "п'ятнадцятій",
+    16: "шістнадцятій", 17: "сімнадцятій", 18: "вісімнадцятій",
+    19: "дев'ятнадцятій", 20: "двадцятій", 21: "двадцять першій", 22: "двадцять другій",
+}
+_WEEKDAY_ACC = ["понеділок", "вівторок", "середу", "четвер", "п'ятницю", "суботу", "неділю"]
+
+
+def say_day(d: date) -> str:
+    """«чотирнадцятого вересня»"""
+    return f"{_ORD_GEN[d.day]} {_MONTH_GEN[d.month]}"
+
+
+def say_time(hour: int) -> str:
+    """«о десятій»"""
+    return f"о {_HOUR_LOC[hour]}"
+
+
+def next_weekday(weekday: int, min_days: int = 1) -> date:
+    """Найближчий майбутній день тижня (0 = понеділок)."""
+    d = date.today() + timedelta(days=min_days)
+    while d.weekday() != weekday:
+        d += timedelta(days=1)
+    return d
+
+
+# ------------------------------ прогон ------------------------------
 
 
 def _cleanup() -> None:
-    conn = sqlite3.connect(pms.DB_PATH)
-    conn.execute("DELETE FROM bookings WHERE guest_name LIKE '%Тестов%'")
-    conn.execute("DELETE FROM messages WHERE guest_name LIKE '%Тестов%'")
+    conn = sqlite3.connect(crm.DB_PATH)
+    conn.execute("DELETE FROM bookings WHERE customer_name LIKE '%Тестов%'")
+    conn.execute("DELETE FROM messages WHERE customer_name LIKE '%Тестов%'")
     conn.commit()
     conn.close()
 
 
 def _test_bookings() -> list[dict]:
-    return [b for b in pms.list_bookings() if "Тестов" in b["guest_name"]]
+    return [b for b in crm.list_bookings() if "Тестов" in b["customer_name"]]
+
+
+def _test_messages() -> list[dict]:
+    return [m for m in crm.list_messages() if "Тестов" in m["customer_name"]]
 
 
 def _booked(log) -> bool:
     return any(n == "create_booking" and r.get("success") for n, _, r in log)
 
 
+def _messaged(log) -> bool:
+    return any(n == "take_message" and r.get("success") for n, _, r in log)
+
+
 def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool,
                done=None) -> list[tuple]:
-    """Прогнати сценарій: скриптові репліки гостя + авто-«так» на підтвердження.
+    """Прогнати сценарій: скриптові репліки клієнта + авто-«так» на підтвердження.
 
     Авто-підтвердження потрібне, бо кількість питань агента (телефон по цифрах,
-    повний переказ броні) може відрізнятись від кількості скриптових реплік.
+    повний переказ запису) може відрізнятись від кількості скриптових реплік.
     Повертає лог викликів інструментів: [(name, args, result), ...].
     """
-    messages = [{"role": "system", "content": bot.build_system_prompt()}]
+    messages = [{"role": "system", "content": build_system_prompt()}]
     tool_log: list[tuple] = []
     queue = list(turns)
     extra = 4 if auto_confirm else 0
@@ -90,7 +147,7 @@ def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool
                 text, extra = "Так, все правильно.", extra - 1
             else:
                 break
-            print(f"  🧑 ГІСТЬ: {text}")
+            print(f"  🧑 КЛІЄНТ: {text}")
             messages.append({"role": "user", "content": text})
 
         resp = client.chat.completions.create(
@@ -102,19 +159,31 @@ def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool
                              "tool_calls": [tc.model_dump() for tc in msg.tool_calls]})
             for tc in msg.tool_calls:
                 args = json.loads(tc.function.arguments)
-                result = _call_tool(tc.function.name, args)
+                result = agent_tools.call_tool(tc.function.name, args)
                 tool_log.append((tc.function.name, args, result))
                 print(f"    🔧 {tc.function.name}({args}) -> {result}")
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "content": json.dumps(result, ensure_ascii=False)})
         else:
-            print(f"  🤖 ОКСАНА: {msg.content}")
+            print(f"  🤖 {BUSINESS.agent_name.upper()}: {msg.content}")
             messages.append({"role": "assistant", "content": msg.content})
 
     return tool_log
 
 
-# ---------- Перевірки сценаріїв (повертають [(ok, опис), ...]) ----------
+# ------------------------ сценарії: готель (nights) ------------------------
+
+H_IN = date.today() + timedelta(days=35)
+H_OUT = H_IN + timedelta(days=3)
+H_PHONE = "0677774567"
+
+
+def _h_turns(room: str, phone_words: str = "сімсот сімдесят сім, сорок п'ять, шістдесят сім"):
+    return (
+        f"Доброго дня! Хочу забронювати {room} номер з {say_day(H_IN)} "
+        f"по {say_day(H_OUT)}, на двох."
+    ), f"Мене звати Тарас Тестовий, телефон нуль шістдесят сім, {phone_words}."
+
 
 def checks_t3(log) -> list[tuple[bool, str]]:
     bs = _test_bookings()
@@ -123,13 +192,12 @@ def checks_t3(log) -> list[tuple[bool, str]]:
         return out
     b = bs[0]
     out += [
-        (b["room_type"] == "superior", f"тип Покращений (є {b['room_type_label']})"),
-        (b["check_in"] == "2026-07-14" and b["check_out"] == "2026-07-17",
-         f"дати 2026-07-14 → 2026-07-17 (є {b['check_in']} → {b['check_out']})"),
-        (b["guests"] == 2, f"2 гостей (є {b['guests']})"),
+        (b["resource"] == "superior", f"тип Покращений (є {b['resource_label']})"),
+        (b["starts_at"] == H_IN.isoformat() and b["ends_at"] == H_OUT.isoformat(),
+         f"дати {H_IN} → {H_OUT} (є {b['starts_at']} → {b['ends_at']})"),
+        (b["party_size"] == 2, f"2 гостей (є {b['party_size']})"),
         (b["total_price"] == 5400, f"сума 5400 грн (є {b['total_price']})"),
-        (_digits(b["phone"]) == "0677774567",
-         f"телефон 0677774567 (є {_digits(b['phone'])})"),
+        (_digits(b["phone"]) == H_PHONE, f"телефон {H_PHONE} (є {_digits(b['phone'])})"),
     ]
     return out
 
@@ -137,7 +205,7 @@ def checks_t3(log) -> list[tuple[bool, str]]:
 def checks_t4(log) -> list[tuple[bool, str]]:
     bs = _test_bookings()
     premature = any(
-        n == "create_booking" and pms.normalize_room_type(a.get("room_type", "")) == "superior"
+        n == "create_booking" and crm.normalize_resource(a.get("room_type", "")) == "superior"
         for n, a, _ in log)
     out = [
         (len(bs) == 1, f"рівно 1 бронь у базі (є {len(bs)})"),
@@ -146,7 +214,7 @@ def checks_t4(log) -> list[tuple[bool, str]]:
     if bs:
         b = bs[0]
         out += [
-            (b["room_type"] == "deluxe", f"тип Делюкс (є {b['room_type_label']})"),
+            (b["resource"] == "deluxe", f"тип Делюкс (є {b['resource_label']})"),
             (b["total_price"] == 8400, f"сума 8400 грн (є {b['total_price']})"),
         ]
     return out
@@ -154,19 +222,16 @@ def checks_t4(log) -> list[tuple[bool, str]]:
 
 def checks_t6(log) -> list[tuple[bool, str]]:
     created = [x for x in log if x[0] == "create_booking" and x[2].get("success")]
-    availability_errors = [
-        x for x in log
-        if x[0] == "check_availability" and x[2].get("error")]
+    errors = [x for x in log if x[0] == "check_availability" and x[2].get("error")]
     caught_without_tool = not any(x[0] == "check_availability" for x in log)
     return [
         (not created, f"бронь НЕ створено (створено {len(created)})"),
-        (caught_without_tool or bool(availability_errors),
-         "помилку дат зловлено (LLM сам або PMS)"),
+        (caught_without_tool or bool(errors), "помилку дат зловлено (LLM сам або сховище)"),
     ]
 
 
 def checks_t8(log) -> list[tuple[bool, str]]:
-    msgs = [m for m in pms.list_messages() if "Тестов" in m["guest_name"]]
+    msgs = _test_messages()
     out = [
         (len(msgs) == 1, f"рівно 1 запит на дзвінок у базі (є {len(msgs)})"),
         (not _test_bookings(), "бронь НЕ створювалась"),
@@ -182,88 +247,236 @@ def checks_t8(log) -> list[tuple[bool, str]]:
     return out
 
 
-SCENARIOS = {
+HOTEL_SCENARIOS = {
     "T3": {
-        "title": "Happy path: Покращений 14–17 липня, 2 гостей, повний flow",
-        "turns": [
-            "Доброго дня! Хочу забронювати покращений номер з чотирнадцятого "
-            "по сімнадцяте липня, на двох.",
-            "Мене звати Тарас Тестовий, телефон нуль шістдесят сім, "
-            "сімсот сімдесят сім, сорок п'ять, шістдесят сім.",
-        ],
-        "auto_confirm": True,
-        "done": _booked,
-        "checks": checks_t3,
+        "title": f"Happy path: Покращений {H_IN}–{H_OUT}, 2 гостей, повний flow",
+        "turns": list(_h_turns("покращений")),
+        "auto_confirm": True, "done": _booked, "checks": checks_t3,
     },
     "T4": {
         "title": "Зміна номера до підтвердження: бронь тільки Делюкс, без передчасної",
-        "turns": [
-            "Доброго дня! Хочу забронювати покращений номер з чотирнадцятого "
-            "по сімнадцяте липня, на двох.",
-            "Тарас Тестовий, телефон нуль шістдесят сім, сімсот "
-            "сімдесят сім, сорок п'ять, шістдесят сім.",
-            "Ні, зачекайте, давайте краще делюкс на ті самі дати.",
-        ],
-        "auto_confirm": True,
-        "done": _booked,
-        "checks": checks_t4,
+        "turns": [*_h_turns("покращений"), "Ні, зачекайте, давайте краще делюкс на ті самі дати."],
+        "auto_confirm": True, "done": _booked, "checks": checks_t4,
     },
     "T6": {
         "title": "Погані дати: виїзд раніше заїзду — бронь не створюється",
         "turns": [
-            "Хочу забронювати стандартний номер на двох. Заїзд сімнадцятого "
-            "липня, а виїзд чотирнадцятого липня.",
+            f"Хочу забронювати стандартний номер на двох. Заїзд {say_day(H_OUT)}, "
+            f"а виїзд {say_day(H_IN)}.",
         ],
-        "auto_confirm": False,
-        "done": None,
-        "checks": checks_t6,
+        "auto_confirm": False, "done": None, "checks": checks_t6,
     },
     "T8": {
         "title": "Off-topic: питання про собаку/спа → take_message, без вигадок",
         "turns": [
-            "Доброго дня! Скажіть, чи можна у вас зупинитися з собакою? "
-            "І чи є спа-центр?",
+            "Доброго дня! Скажіть, чи можна у вас зупинитися з собакою? І чи є спа-центр?",
             "Тарас Тестовий, телефон нуль шістдесят сім, сто двадцять три, "
             "сорок п'ять, шістдесят сім.",
         ],
-        "auto_confirm": True,
-        "done": lambda log: any(
-            n == "take_message" and r.get("success") for n, _, r in log),
-        "checks": checks_t8,
+        "auto_confirm": True, "done": _messaged, "checks": checks_t8,
     },
 }
 
 
-def main() -> int:
-    names = [n.upper() for n in sys.argv[1:]] or list(SCENARIOS)
-    unknown = [n for n in names if n not in SCENARIOS]
-    if unknown:
-        print(f"Невідомі сценарії: {unknown}. Доступні: {list(SCENARIOS)}")
-        return 2
+# ------------------ сценарії: запис на час (slots) ------------------
 
-    pms.init_db()
+S_DAY = next_weekday(1, min_days=2)  # найближчий вівторок — робочий скрізь
+S_HOUR = 10
+S_BUSY_HOUR = 12
+S_PHONE = "0677774567"
+BUSY_STUB = "Зайнято Тестовий"  # ім'я броні-заглушки, якою забиваємо годину в C2
+
+
+def _s_name_turn() -> str:
+    return ("Мене звати Тарас Тестовий, телефон нуль шістдесят сім, "
+            "сімсот сімдесят сім, сорок п'ять, шістдесят сім.")
+
+
+def checks_c1(log) -> list[tuple[bool, str]]:
+    bs = _test_bookings()
+    out = [(len(bs) == 1, f"рівно 1 запис у базі (є {len(bs)})")]
+    if not bs:
+        return out
+    b = bs[0]
+    want = f"{S_DAY.isoformat()}T{S_HOUR:02d}:00"
+    res = BOOK_FIRST.key
+    out += [
+        (b["resource"] == res, f"послуга {BOOK_FIRST.label} (є {b['resource_label']})"),
+        (b["starts_at"] == want, f"початок {want} (є {b['starts_at']})"),
+        (b["total_price"] == BOOK_FIRST.price,
+         f"ціна {BOOK_FIRST.price} (є {b['total_price']})"),
+        (_digits(b["phone"]) == S_PHONE, f"телефон {S_PHONE} (є {_digits(b['phone'])})"),
+        (not _test_messages(), "зайвого запиту на дзвінок після запису немає"),
+    ]
+    return out
+
+
+def checks_c2(log) -> list[tuple[bool, str]]:
+    """Час зайнятий: агент мусить запропонувати альтернативу, а не вигадати місце."""
+    busy = f"{S_DAY.isoformat()}T{S_BUSY_HOUR:02d}:00"
+    offered = any(x[0] == "check_availability" and x[2].get("alternatives") for x in log)
+    booked_busy = [b for b in _test_bookings()
+                   if b["starts_at"] == busy and b["customer_name"] != BUSY_STUB]
+    return [
+        (offered, "інструмент повернув вільні альтернативи"),
+        (not booked_busy, f"запис на зайняту годину НЕ створено (створено {len(booked_busy)})"),
+    ]
+
+
+def checks_c3(log) -> list[tuple[bool, str]]:
+    created = [x for x in log if x[0] == "create_booking" and x[2].get("success")]
+    return [(not created, f"запис у неробочий день НЕ створено (створено {len(created)})")]
+
+
+def checks_c4(log) -> list[tuple[bool, str]]:
+    msgs = _test_messages()
+    out = [
+        (len(msgs) == 1, f"рівно 1 запит на дзвінок у базі (є {len(msgs)})"),
+        (not _test_bookings(), "запис НЕ створювався"),
+    ]
+    if msgs:
+        out.append((len(msgs[0]["topic"]) > 5, f"суть питання збережено ({msgs[0]['topic']!r})"))
+    return out
+
+
+def _closed_case(service_phrase: str) -> tuple[str, str]:
+    """Прохання на час, коли заклад зачинений. Який саме — залежить від графіка:
+    у клініки це неділя, у барбершопа (працює щодня) — пізній вечір."""
+    for ahead in range(1, 8):
+        d = date.today() + timedelta(days=ahead)
+        if BUSINESS.booking.hours_for(d) is None:
+            return (
+                f"Запишіть мене на {service_phrase} {say_day(d)}, {say_time(11)}.",
+                "Вихідний день: запис не створюється",
+            )
+    late = next_weekday(1, min_days=2)
+    return (
+        f"Запишіть мене на {service_phrase} {say_day(late)}, {say_time(22)}.",
+        "Час після закриття: запис не створюється",
+    )
+
+
+def _slot_scenarios(service_phrase: str, busy_service: str, offtopic: str) -> dict:
+    """Той самий кістяк для будь-якого закладу, що записує на час."""
+    closed_turn, closed_title = _closed_case(service_phrase)
+    return {
+        "C1": {
+            "title": f"Happy path: {service_phrase} {say_day(S_DAY)} {say_time(S_HOUR)}",
+            "turns": [
+                f"Доброго дня! Хочу записатися на {service_phrase} "
+                f"{say_day(S_DAY)}, {say_time(S_HOUR)}.",
+                _s_name_turn(),
+            ],
+            "auto_confirm": True, "done": _booked, "checks": checks_c1,
+        },
+        "C2": {
+            "title": "Зайнятий час: агент пропонує вільні варіанти, не вигадує місце",
+            "turns": [
+                f"Хочу {busy_service} {say_day(S_DAY)}, {say_time(S_BUSY_HOUR)}.",
+            ],
+            "auto_confirm": False, "done": None, "checks": checks_c2,
+            "prepare": busy_service,
+        },
+        "C3": {
+            "title": closed_title,
+            "turns": [closed_turn],
+            "auto_confirm": False, "done": None, "checks": checks_c3,
+        },
+        "C4": {
+            "title": f"Off-topic ({offtopic}) → take_message, без вигадок",
+            "turns": [offtopic, _s_name_turn()],
+            "auto_confirm": True, "done": _messaged, "checks": checks_c4,
+        },
+    }
+
+
+SCENARIOS_BY_BUSINESS = {
+    "hotel": HOTEL_SCENARIOS,
+    "clinic": _slot_scenarios(
+        "професійну чистку", "видалити зуб",
+        "Скажіть, а ви приймаєте страховку і чи можна прийти з гострим болем зараз?",
+    ),
+    "barbershop": _slot_scenarios(
+        "стрижку", "комплекс",
+        "А можна записатися саме до Дениса, і чи є у вас подарункові сертифікати?",
+    ),
+}
+
+# Послуга, на яку записується C1 (перевіряємо ціну й ключ) — перша в конфігу,
+# крім готелю, де сценарії свої.
+BOOK_FIRST = None
+if BUSINESS.booking.resources:
+    _by_label = {r.label.lower(): r for r in BUSINESS.booking.resources}
+    BOOK_FIRST = _by_label.get("професійна чистка") or _by_label.get("стрижка")
+
+
+def _prepare_busy(service_phrase: str) -> None:
+    """Забити годину, яку в C2 попросить клієнт — стільки разів, скільки місць."""
+    key = crm.normalize_resource(service_phrase)
+    res = BUSINESS.booking.resource(key)
+    for _ in range(res.capacity):
+        crm.create_booking(
+            resource=res.label,
+            start=f"{S_DAY.isoformat()}T{S_BUSY_HOUR:02d}:00",
+            customer_name=BUSY_STUB,
+            phone="0501112233",
+        )
+
+
+def run_business(key: str, names: list[str]) -> dict[str, list[tuple[bool, str]]]:
+    scenarios = SCENARIOS_BY_BUSINESS.get(key)
+    if not scenarios:
+        print(f"Для закладу {key} сценаріїв немає")
+        return {}
+    picked = [n for n in (names or list(scenarios)) if n in scenarios]
+    if names and not picked:
+        print(f"Для {key} немає сценаріїв {names}; доступні: {list(scenarios)}")
+        return {}
+
+    crm.init_db()
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    tools = OpenAILLMAdapter().from_standard_tools(ToolsSchema(standard_tools=[
-        bot.CHECK_AVAILABILITY_SCHEMA, bot.CREATE_BOOKING_SCHEMA, bot.TAKE_MESSAGE_SCHEMA]))
+    tools = OpenAILLMAdapter().from_standard_tools(agent_tools.tools_schema())
 
-    results: dict[str, list[tuple[bool, str]]] = {}
-    for name in names:
-        sc = SCENARIOS[name]
-        print(f"\n{'=' * 60}\n{name} — {sc['title']}\n{'=' * 60}")
+    results = {}
+    for name in picked:
+        sc = scenarios[name]
+        print(f"\n{'=' * 60}\n{key} · {name} — {sc['title']}\n{'=' * 60}")
         _cleanup()
+        if sc.get("prepare"):
+            _prepare_busy(sc["prepare"])
         log = run_dialog(client, tools, sc["turns"], sc["auto_confirm"], sc["done"])
         results[name] = sc["checks"](log)
+    _cleanup()
+    return results
 
-    print(f"\n{'=' * 60}\nПІДСУМОК\n{'=' * 60}")
+
+def main() -> int:
+    names = [n.upper() for n in _ARGV]
+    if _BUSINESS_ARG == "all":
+        # кожен заклад — окремий процес: конфіг фіксується на імпорті
+        import subprocess
+
+        failed = 0
+        for key in SCENARIOS_BY_BUSINESS:
+            print(f"\n\n{'#' * 60}\n# {key}\n{'#' * 60}")
+            failed += subprocess.call(
+                [sys.executable, __file__, "--business", key, *names]) != 0
+        return 1 if failed else 0
+
+    results = run_business(BUSINESS.key, names)
+    if not results:
+        return 2
+
+    print(f"\n{'=' * 60}\nПІДСУМОК · {BUSINESS.key}\n{'=' * 60}")
+    scenarios = SCENARIOS_BY_BUSINESS[BUSINESS.key]
     failed = 0
     for name, checks in results.items():
         ok = all(c[0] for c in checks)
         failed += not ok
-        print(f"{'✅' if ok else '❌'} {name} — {SCENARIOS[name]['title']}")
+        print(f"{'✅' if ok else '❌'} {name} — {scenarios[name]['title']}")
         for passed, desc in checks:
             print(f"    {'✓' if passed else '✗ FAIL:'} {desc}")
 
-    _cleanup()
     print(f"\n{len(results) - failed}/{len(results)} сценаріїв пройдено")
     return 1 if failed else 0
 
