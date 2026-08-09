@@ -76,7 +76,7 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
-from speech_text import UkrainianSpeechFilter
+from speech_text import UkrainianSpeechFilter, WholeReplyAggregator
 
 load_dotenv(override=True)
 
@@ -175,6 +175,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # stability 0.4: нижче за дефолт 0.5 — інтонація гуляє живіше, але лишається
     # передбачуваною. style тримаємо на 0 — він додає затримки, а бюджет розмови
     # і так напружений. Без ELEVENLABS_API_KEY — відкат на OpenAI.
+    # Ціла репліка одним синтезом: інтонація будується на всьому тексті, а не
+    # на кожному реченні окремо. Ціна — бот мовчить, доки модель не допише
+    # відповідь. Вимикається через TTS_WHOLE_REPLY=0. Оголошено тут, бо потрібне
+    # і для гілки без ElevenLabs, і нижче при збиранні пайплайна.
+    whole_reply = os.getenv("TTS_WHOLE_REPLY", "1") == "1"
+
     if elevenlabs_key:
         voice_settings = dict(
             voice=os.getenv("ELEVENLABS_VOICE_ID", "bsourKGZEagmttzrIzmu"),  # Kateryna Pavlenko
@@ -184,12 +190,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             stability=float(os.getenv("ELEVENLABS_STABILITY", "0.4")),
             style=float(os.getenv("ELEVENLABS_STYLE", "1.0")),
         )
-        # ws — потоковий мульти-стрім (нижча затримка), http — окремий запит на
-        # репліку. Перемикач потрібен, бо на ws-шляху репліка інколи обривається
-        # на середині: аудіо від ElevenLabs приходить повне (перевірено прямим
-        # запитом до API), але до браузера долітає не все, а третя репліка
-        # поспіль інколи не звучить узагалі.
-        if os.getenv("ELEVENLABS_TTS_TRANSPORT", "http") == "http":
+        # ws — потоковий мульти-стрім: усі речення репліки йдуть в один
+        # context_id, тому інтонація тягнеться крізь них. http — окремий запит
+        # на кожен шматок, інтонація рветься; лишений як запасний варіант.
+        # (Обрив мовлення, через який http колись став типовим, виявився багом
+        # саморобного клієнта, а не TTS.)
+        if os.getenv("ELEVENLABS_TTS_TRANSPORT", "ws") == "http":
             tts = ElevenLabsHttpTTSService(
                 api_key=elevenlabs_key,
                 aiohttp_session=aiohttp_session,
@@ -266,6 +272,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             stt,
             user_aggregator,
             llm,
+            *([WholeReplyAggregator()] if whole_reply else []),
             tts,
             transport.output(),
             assistant_aggregator,

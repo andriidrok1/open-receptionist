@@ -35,6 +35,17 @@ fine-tuned під flash v2.5) ставить наголоси сам, а нез�
 
 import re
 
+from pipecat.frames.frames import (
+    AggregatedTextFrame,
+    Frame,
+    InterruptionFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    TextFrame,
+    TTSTextFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
 MAX_BREAKS = 2  # більше — і мовлення починає розганятись
 MAX_BREAK_SEC = 0.6
 
@@ -94,3 +105,55 @@ if __name__ == "__main__":
     for s in samples:
         print("\nIN :", s)
         print("OUT:", f.prepare(s))
+
+
+class WholeReplyAggregator(FrameProcessor):
+    """Копити відповідь LLM і віддати її в TTS одним шматком.
+
+    За замовчуванням pipecat синтезує по реченню: перше речення йде в озвучення,
+    поки модель ще дописує друге. Це найкоротша затримка, але інтонація
+    будується в межах речення — синтезатор не знає, що далі буде ще фраза, і
+    кожну завершує крапкою. Репліка з трьох речень звучить як три окремі
+    оголошення.
+
+    Тут ми чекаємо кінця відповіді й віддаємо весь текст разом: інтонація
+    тягнеться через усю репліку, ціна не падає в порожнечу, питання в кінці
+    звучить питанням. Платимо затримкою — бот мовчить, доки модель не допише.
+
+    Віддаємо `AggregatedTextFrame`, а не звичайний `TextFrame`: він іде повз
+    внутрішній агрегатор TTS. Простий текст той спершу синтезує, а потім ще раз
+    вивалює з власного буфера на кінці відповіді — репліка озвучувалась двічі.
+
+    Ставити між LLM і TTS.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._parts: list[str] = []
+        self._collecting = False
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._parts, self._collecting = [], True
+            await self.push_frame(frame, direction)
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            text = "".join(self._parts).strip()
+            self._parts, self._collecting = [], False
+            if text:
+                await self.push_frame(
+                    AggregatedTextFrame(text=text, aggregated_by="llm_response"), direction
+                )
+            await self.push_frame(frame, direction)
+        elif self._collecting and isinstance(frame, TextFrame) and not isinstance(
+            frame, (TTSTextFrame,)
+        ):
+            # Текст притримуємо; далі він піде одним фреймом.
+            self._parts.append(frame.text)
+        elif isinstance(frame, InterruptionFrame):
+            # Перебили — недописане нікому не потрібне.
+            self._parts, self._collecting = [], False
+            await self.push_frame(frame, direction)
+        else:
+            await self.push_frame(frame, direction)
