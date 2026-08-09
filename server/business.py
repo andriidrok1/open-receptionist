@@ -39,6 +39,9 @@ load_dotenv(Path(__file__).parent / ".env", override=True)
 
 BUSINESSES_DIR = Path(__file__).parent / "businesses"
 
+#: Ліміт ElevenLabs Scribe на довжину одного keyterm.
+MAX_KEYTERM_LEN = 20
+
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 WEEKDAYS_UK = ("понеділок", "вівторок", "середа", "четвер", "п'ятниця", "субота", "неділя")
 
@@ -204,8 +207,27 @@ class Business:
         return self.customer[2]
 
     def stt_keyterms(self) -> list[str]:
-        """Слова, які STT має розпізнавати впевнено: назви послуг + доменні."""
-        return [r.label for r in self.booking.resources] + list(self.keyterms)
+        """Слова, які STT має розпізнавати впевнено: назви послуг + доменні.
+
+        ElevenLabs Scribe приймає keyterm не довший за 20 символів і на довшому
+        РВЕ ВСЕ З'ЄДНАННЯ (1008 invalid_request), а не ігнорує зайве. Виглядає
+        це як «розпізнавання не працює взагалі»: звук іде, VAD спрацьовує, а
+        транскриптів немає. Тому довгі назви («Підтримуюче однокімнатна»,
+        «Аварійне відкриття дверей») ріжемо на слова — користь для розпізнавання
+        лишається, обмеження дотримане.
+        """
+        out: list[str] = []
+        for raw in [r.label for r in self.booking.resources] + list(self.keyterms):
+            if len(raw) <= MAX_KEYTERM_LEN:
+                out.append(raw)
+            else:
+                out.extend(w for w in raw.split() if 3 < len(w) <= MAX_KEYTERM_LEN)
+        seen, uniq = set(), []
+        for t in out:
+            if t.lower() not in seen:
+                seen.add(t.lower())
+                uniq.append(t)
+        return uniq
 
 
 # --------------------------- завантаження YAML ---------------------------
