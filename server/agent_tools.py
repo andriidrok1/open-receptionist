@@ -19,6 +19,8 @@ import crm
 BIZ = BUSINESS
 BOOK = BUSINESS.booking
 
+_OPTIONAL_INTAKE = {f.key for f in BOOK.intake if not f.required}
+
 PHONE_DESC = (
     "Номер телефону ВИКЛЮЧНО цифрами, напр. 0671234567. "
     "Ніколи не передавай словами («нуль шість сім») — тільки цифри."
@@ -66,6 +68,18 @@ def _booking_props() -> dict:
     return {**_when_props(), BOOK.resource_param: _resource_prop(), **_party_props()}
 
 
+def _intake_props() -> dict:
+    """Поля галузі (адреса, тип роботи) — окремими аргументами, щоб модель не
+    ховала їх у вільному тексті, звідки їх потім не дістати."""
+    return {
+        f.key: {
+            "type": "string",
+            "description": f.description or f.label.capitalize(),
+        }
+        for f in BOOK.intake
+    }
+
+
 CHECK_AVAILABILITY_SCHEMA = FunctionSchema(
     name="check_availability",
     description=(
@@ -79,6 +93,7 @@ CHECK_AVAILABILITY_SCHEMA = FunctionSchema(
 
 _CREATE_PROPS = {
     **_booking_props(),
+    **_intake_props(),
     "customer_name": {"type": "string", "description": f"Ім'я, як представився {BIZ.customer_nom}"},
     "phone": {"type": "string", "description": PHONE_DESC},
 }
@@ -90,7 +105,7 @@ CREATE_BOOKING_SCHEMA = FunctionSchema(
         f"повторила всі деталі і {BIZ.customer_nom} явно підтвердив («так»)."
     ),
     properties=_CREATE_PROPS,
-    required=list(_CREATE_PROPS),
+    required=[k for k in _CREATE_PROPS if k not in _OPTIONAL_INTAKE],
 )
 
 TAKE_MESSAGE_SCHEMA = FunctionSchema(
@@ -151,6 +166,7 @@ def call_tool(name: str, args: dict) -> dict:
             customer_name=args.get("customer_name"),
             phone=args.get("phone"),
             party_size=_party(args),
+            details={f.key: args.get(f.key) for f in BOOK.intake},
         )
     if name == "take_message":
         return crm.take_message(args.get("customer_name"), args.get("phone"), args.get("topic"))

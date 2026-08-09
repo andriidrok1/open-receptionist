@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Голосовий адміністратор — демо</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%236c5ce7'/%3E%3Cpath d='M9 6h6v7a3 3 0 0 1-6 0z' fill='white'/%3E%3Cpath d='M7 12a5 5 0 0 0 10 0M12 17v3' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+<style>
+  :root {
+    --primary: #6c5ce7;
+    --primary-soft: #efecfd;
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --ink: #1b1f2a;
+    --ink-2: #5b6270;
+    --muted: #9aa1ad;
+    --hair: #e8e9ee;
+    --good: #22b563;
+    --warn: #e08636;
+    --crit: #ef5350;
+    --radius: 18px;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --primary: #8b7cf0; --primary-soft: #2a2545;
+      --bg: #14151a; --surface: #1c1e25; --ink: #eef0f4; --ink-2: #aab1bd;
+      --muted: #7d848f; --hair: #2a2d36;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 22px 18px 56px; }
+
+  /* ---------- шапка ---------- */
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+  .logo { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+  .logo-mark {
+    width: 34px; height: 34px; border-radius: 11px; background: var(--primary);
+    display: grid; place-items: center; color: #fff; flex: none;
+  }
+  .logo-mark svg { width: 18px; height: 18px; }
+  .badge-demo {
+    font-size: 12.5px; color: var(--ink-2); background: var(--surface);
+    border: 1px solid var(--hair); border-radius: 999px; padding: 6px 13px;
+  }
+  .lede { color: var(--ink-2); margin: 14px 0 20px; max-width: 60ch; }
+
+  /* ---------- вкладки ---------- */
+  .tabs {
+    display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    flex: none; border: 1px solid var(--hair); background: var(--surface);
+    color: var(--ink-2); border-radius: 999px; padding: 10px 18px;
+    font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .tab:hover { color: var(--ink); }
+  .tab[aria-selected="true"] {
+    background: var(--primary); border-color: var(--primary); color: #fff;
+  }
+
+  /* ---------- сітка ---------- */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; align-items: start; }
+  .card {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px;
+  }
+
+  /* ---------- картка закладу ---------- */
+  .biz-name { font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
+  .biz-meta { color: var(--muted); font-size: 14px; margin-top: 5px; }
+  .biz-intro { color: var(--ink-2); margin: 16px 0 0; }
+  .section-h {
+    font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); margin: 24px 0 10px;
+  }
+  .price { display: flex; justify-content: space-between; gap: 14px; padding: 9px 0; border-top: 1px solid var(--hair); }
+  .price:first-of-type { border-top: none; }
+  .price-name { font-weight: 500; }
+  .price-note { color: var(--muted); font-size: 13px; }
+  .price-val { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+  .asks { color: var(--ink-2); font-size: 14px; }
+  .chips { display: flex; flex-direction: column; gap: 8px; }
+  .chip {
+    text-align: left; border: 1px dashed var(--hair); background: transparent;
+    color: var(--ink); border-radius: 12px; padding: 11px 14px; font: inherit;
+    font-size: 15px; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .chip:hover { border-style: solid; border-color: var(--primary); background: var(--primary-soft); }
+  .chip.said { opacity: .45; }
+
+  /* ---------- панель дзвінка ---------- */
+  .call { text-align: center; }
+  .dial {
+    width: 128px; height: 128px; border-radius: 50%; border: none; cursor: pointer;
+    background: var(--primary); color: #fff; display: grid; place-items: center;
+    margin: 6px auto 0; box-shadow: 0 10px 30px rgba(108,92,231,.32);
+    transition: transform .15s, background .2s, box-shadow .2s;
+  }
+  .dial svg { width: 44px; height: 44px; }
+  .dial:hover { transform: translateY(-2px); }
+  .dial:disabled { cursor: default; opacity: .75; }
+  .dial.idle { animation: pulse 2.6s ease-out infinite; }
+  .dial.live { background: var(--crit); box-shadow: 0 10px 30px rgba(239,83,80,.32); animation: none; }
+  @keyframes pulse {
+    0% { box-shadow: 0 10px 30px rgba(108,92,231,.32), 0 0 0 0 rgba(108,92,231,.35); }
+    70% { box-shadow: 0 10px 30px rgba(108,92,231,.32), 0 0 0 22px rgba(108,92,231,0); }
+    100% { box-shadow: 0 10px 30px rgba(108,92,231,.32), 0 0 0 0 rgba(108,92,231,0); }
+  }
+  @media (prefers-reduced-motion: reduce) { .dial.idle { animation: none; } }
+  .state { margin-top: 15px; font-weight: 600; min-height: 24px; }
+  .state small { display: block; font-weight: 400; color: var(--muted); font-size: 13.5px; margin-top: 3px; }
+  .timer { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13.5px; margin-top: 4px; }
+  .timer.warn { color: var(--warn); font-weight: 600; }
+
+  /* ---------- розмова ---------- */
+  .talk { margin-top: 22px; text-align: left; display: none; }
+  .talk.on { display: block; }
+  .bubbles { display: flex; flex-direction: column; gap: 9px; max-height: 320px; overflow-y: auto; padding-right: 2px; }
+  .b { max-width: 84%; padding: 10px 14px; border-radius: 15px; font-size: 15px; }
+  .b.bot { background: var(--primary-soft); color: var(--ink); border-bottom-left-radius: 5px; align-self: flex-start; }
+  .b.me { background: var(--bg); border: 1px solid var(--hair); border-bottom-right-radius: 5px; align-self: flex-end; }
+  .b.live { opacity: .6; }
+  .acts { margin-top: 16px; display: flex; flex-direction: column; gap: 7px; }
+  .act { display: flex; align-items: center; gap: 9px; color: var(--ink-2); font-size: 14px; }
+  .act i { width: 17px; height: 17px; border-radius: 50%; background: var(--good); flex: none; display: grid; place-items: center; }
+  .act i svg { width: 11px; height: 11px; stroke: #fff; stroke-width: 3; fill: none; }
+
+  /* ---------- результат ---------- */
+  .result { margin-top: 18px; text-align: left; display: none; }
+  .result.on { display: block; }
+  .rec {
+    border: 1px solid var(--primary); border-radius: 14px; padding: 15px 17px;
+    background: var(--primary-soft);
+  }
+  .rec-h { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .rec-title { font-weight: 700; }
+  .rec-ref { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .rec-row { display: flex; gap: 8px; margin-top: 7px; font-size: 14.5px; }
+  .rec-row b { font-weight: 600; color: var(--ink-2); min-width: 92px; flex: none; }
+  .empty { color: var(--muted); font-size: 14px; }
+
+  .note {
+    margin-top: 20px; padding: 13px 15px; border-radius: 12px;
+    background: var(--surface); border: 1px solid var(--hair); color: var(--ink-2); font-size: 14px;
+  }
+  .note.bad { border-color: var(--crit); color: var(--crit); }
+
+  @media (min-width: 901px) { .call-panel { position: sticky; top: 20px; } }
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr; }
+    .call-panel { order: -1; }
+    .wrap { padding-top: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="logo">
+      <span class="logo-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/>
+        </svg>
+      </span>
+      Голосовий адміністратор
+    </div>
+    <span class="badge-demo">демо · справжніх записів не створюється</span>
+  </div>
+
+  <p class="lede">
+    Оберіть свою сферу і подзвоніть — так само, як подзвонив би ваш клієнт.
+    Розмова українською, голосом, без встановлення будь-чого.
+  </p>
+
+  <div class="tabs" id="tabs" role="tablist"></div>
+
+  <div class="grid">
+    <section class="card" id="biz"></section>
+
+    <section class="card call call-panel">
+      <button class="dial idle" id="dial" aria-label="Подзвонити">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="dialIcon">
+          <path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/>
+        </svg>
+      </button>
+      <div class="state" id="state">Подзвонити</div>
+      <div class="timer" id="timer"></div>
+
+      <div class="talk" id="talk">
+        <div class="section-h">Розмова</div>
+        <div class="bubbles" id="bubbles"></div>
+        <div class="acts" id="acts"></div>
+      </div>
+
+      <div class="result" id="result">
+        <div class="section-h">Це побачить адміністратор</div>
+        <div id="resultBody"></div>
+      </div>
+
+      <div class="note" id="note" hidden></div>
+    </section>
+  </div>
+</div>
+
+<audio id="botAudio" autoplay playsinline></audio>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const el = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
+const esc = (s) => String(s ?? "").replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+const nf = new Intl.NumberFormat("uk-UA");
+const dm = (iso) => iso.slice(8, 10) + "." + iso.slice(5, 7);
+
+/** Коли саме — так, як це прочитав би адміністратор, а не як лежить у базі. */
+function fmtWhen(startsAt, endsAt) {
+  if (startsAt.includes("T")) {
+    const today = new Date().toISOString().slice(0, 10);
+    const day = startsAt.slice(0, 10) === today ? "сьогодні" : dm(startsAt);
+    return `${day}, ${startsAt.slice(11, 16)}`;
+  }
+  return `${dm(startsAt)} → ${dm(endsAt)}`;
+}
+
+let CARDS = [], current = null;
+let pc = null, dc = null, micStream = null, pingTimer = null, tickTimer = null;
+let callStartedUtc = null, seconds = 0, liveBubble = null, botBubble = null;
+
+const ICON_CALL = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/>';
+const ICON_HANGUP = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/><path d="M3 3l18 18"/>';
+
+/* Дії бота людською мовою — глядач має розуміти, що саме сталося. */
+const ACTION_LABEL = {
+  check_availability: "перевірила вільний час",
+  create_booking: "створила запис у системі",
+  take_message: "записала запит на зворотний дзвінок",
+};
+
+/* ------------------------------ рендер ------------------------------ */
+
+function renderTabs() {
+  const box = $("tabs"); box.innerHTML = "";
+  for (const c of CARDS) {
+    const b = el(`<button class="tab" role="tab" aria-selected="${c === current}">${esc(c.tab)}</button>`);
+    b.onclick = () => { if (pc) hangUp(); select(c); };
+    box.appendChild(b);
+  }
+}
+
+function renderBiz() {
+  const c = current;
+  const prices = c.resources.map(r => `
+    <div class="price">
+      <div><div class="price-name">${esc(r.label)}</div><div class="price-note">${esc(r.note)}</div></div>
+      <div class="price-val">${nf.format(r.price)} ${esc(c.currency)}</div>
+    </div>`).join("");
+
+  const asks = c.intake.length
+    ? `<div class="section-h">Запитає також</div><div class="asks">${c.intake.map(esc).join(" · ")}</div>`
+    : "";
+
+  const chips = c.try.map(t => `<button class="chip">«${esc(t)}»</button>`).join("");
+
+  $("biz").innerHTML = `
+    <div class="biz-name">${esc(c.brand)}</div>
+    <div class="biz-meta">${esc([c.city, c.hours].filter(Boolean).join(" · "))}</div>
+    <p class="biz-intro">${esc(c.intro)}</p>
+    <div class="section-h">Прайс, який знає ${esc(c.agent)}</div>
+    ${prices}
+    ${asks}
+    <div class="section-h">Спробуйте сказати</div>
+    <div class="chips">${chips}</div>`;
+
+  $("biz").querySelectorAll(".chip").forEach(ch => {
+    ch.onclick = () => ch.classList.toggle("said");  // просто відмітка «це я вже казав»
+  });
+}
+
+function select(c) {
+  current = c;
+  renderTabs();
+  renderBiz();
+  $("talk").classList.remove("on");
+  $("result").classList.remove("on");
+  $("bubbles").innerHTML = "";
+  $("acts").innerHTML = "";
+  setState("Подзвонити", `${c.agent} відповість українською`);
+}
+
+function setState(main, sub = "") {
+  $("state").innerHTML = `${esc(main)}${sub ? `<small>${esc(sub)}</small>` : ""}`;
+}
+
+function note(text, bad = false) {
+  const n = $("note");
+  n.hidden = !text;
+  n.textContent = text || "";
+  n.classList.toggle("bad", !!bad);
+}
+
+/* ------------------------------ розмова ------------------------------ */
+
+function bubble(who, text, live = false) {
+  const box = $("bubbles");
+  if (live) {
+    if (!liveBubble) { liveBubble = el(`<div class="b ${who} live"></div>`); box.appendChild(liveBubble); }
+    liveBubble.textContent = text;
+  } else {
+    if (liveBubble) { liveBubble.remove(); liveBubble = null; }
+    // Бот віддає транскрипт по реченню за раз. Три бульбашки замість однієї
+    // репліки читаються як заїкання, тому доклеюємо, поки говорить він.
+    if (who === "bot" && botBubble) {
+      botBubble.textContent = (botBubble.textContent + " " + text).replace(/\s+/g, " ").trim();
+    } else {
+      const b = el(`<div class="b ${who}">${esc(text)}</div>`);
+      box.appendChild(b);
+      botBubble = who === "bot" ? b : null;
+    }
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+function action(name) {
+  const label = ACTION_LABEL[name];
+  if (!label) return;
+  $("acts").appendChild(el(`
+    <div class="act"><i><svg viewBox="0 0 24 24"><path d="M4 12l6 6L20 6"/></svg></i>${esc(label)}</div>`));
+}
+
+function onRtvi(raw) {
+  let m; try { m = JSON.parse(raw); } catch { return; }
+  if (m.label !== "rtvi-ai") return;
+  const d = m.data || {};
+  switch (m.type) {
+    case "user-transcription":
+      if (d.text) bubble("me", d.text, !d.final);
+      break;
+    case "bot-transcription":
+      if (d.text) bubble("bot", d.text);
+      break;
+    case "llm-function-call":
+    case "llm-function-call-started":
+      action(d.function_name || d.name);
+      break;
+    case "bot-started-speaking":
+      setState("Говорить " + current.agent, "перебивайте, коли захочете");
+      break;
+    case "user-transcription-final-marker":
+      break;
+    case "bot-stopped-speaking":
+    case "user-started-speaking":
+      botBubble = null;  // наступне речення бота піде вже новою реплікою
+      setState("Слухаю", "говоріть звичайним голосом");
+      break;
+  }
+}
+
+/* ------------------------------ дзвінок ------------------------------ */
+
+function iceReady(pc) {
+  if (pc.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { pc.removeEventListener("icegatheringstatechange", check); resolve(); };
+    const check = () => { if (pc.iceGatheringState === "complete") done(); };
+    pc.addEventListener("icegatheringstatechange", check);
+    setTimeout(done, 3000);  // не чекаємо вічно: локальних кандидатів вистачає
+  });
+}
+
+async function call() {
+  const c = current;
+  if (!window.isSecureContext) {
+    note("Мікрофон працює лише через https або з localhost. Відкрийте демо за захищеним посиланням.", true);
+    return;
+  }
+  note("");
+  $("talk").classList.add("on");
+  $("result").classList.remove("on");
+  $("bubbles").innerHTML = ""; $("acts").innerHTML = ""; liveBubble = botBubble = null;
+  setState("З'єднуємось…");
+  $("dial").disabled = true;
+
+  // created_at у базі — UTC (datetime('now')), тож і мітку старту беремо в UTC,
+  // інакше «що з'явилось після дзвінка» промахнеться на зсув часової зони.
+  callStartedUtc = new Date().toISOString().slice(0, 19).replace("T", " ");
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch {
+    setState("Подзвонити");
+    $("dial").disabled = false;
+    note("Не вдалося отримати доступ до мікрофона. Дозвольте його в налаштуваннях браузера.", true);
+    return;
+  }
+
+  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  micStream.getAudioTracks().forEach(t => pc.addTrack(t, micStream));
+  pc.ontrack = (ev) => { $("botAudio").srcObject = ev.streams[0]; };
+  pc.onconnectionstatechange = () => {
+    if (["failed", "closed", "disconnected"].includes(pc.connectionState)) hangUp();
+  };
+
+  dc = pc.createDataChannel("rtvi");
+  dc.onmessage = (ev) => onRtvi(ev.data);
+  dc.onopen = () => {
+    // Без client-ready бот не привітається — він чекає саме на це повідомлення.
+    dc.send(JSON.stringify({
+      label: "rtvi-ai", type: "client-ready", id: "ready",
+      data: { version: "2.0.0", about: { library: "voice-receptionist-demo" } },
+    }));
+    // Сервер не бачить розриву сам — тримаємо його в курсі пінгами.
+    pingTimer = setInterval(() => { try { dc.send("ping"); } catch {} }, 5000);
+  };
+
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    await iceReady(pc);
+    const base = `${location.protocol}//${location.hostname}:${c.port}`;
+    const res = await fetch(`${base}/api/offer`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    });
+    if (!res.ok) throw new Error(res.status);
+    await pc.setRemoteDescription(await res.json());
+  } catch (e) {
+    hangUp();
+    note(`Бот цієї сфери зараз не відповідає (порт ${c.port}). Перевірте, що запущено run_demo.py.`, true);
+    return;
+  }
+
+  $("dial").disabled = false;
+  $("dial").classList.remove("idle");
+  $("dial").classList.add("live");
+  $("dialIcon").innerHTML = ICON_HANGUP;
+  $("dial").setAttribute("aria-label", "Покласти трубку");
+  setState("Говоріть", "натисніть ще раз, щоб покласти трубку");
+  startTimer();
+}
+
+function startTimer() {
+  seconds = 0;
+  const limit = current.max_call_seconds || 0;
+  tickTimer = setInterval(() => {
+    seconds++;
+    const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
+    const ss = String(seconds % 60).padStart(2, "0");
+    const left = limit - seconds;
+    $("timer").textContent = limit && left <= 30
+      ? `${mm}:${ss} · демо-дзвінок завершиться за ${left} с`
+      : `${mm}:${ss}`;
+    $("timer").classList.toggle("warn", !!limit && left <= 30);
+    if (limit && seconds >= limit) hangUp();
+  }, 1000);
+}
+
+function hangUp() {
+  clearInterval(pingTimer); pingTimer = null;
+  clearInterval(tickTimer); tickTimer = null;
+  $("timer").textContent = ""; $("timer").classList.remove("warn");
+  try { dc && dc.close(); } catch {}
+  try { pc && pc.close(); } catch {}
+  micStream && micStream.getTracks().forEach(t => t.stop());
+  pc = dc = micStream = null;
+  $("dial").disabled = false;
+  $("dial").classList.remove("live");
+  $("dial").classList.add("idle");
+  $("dialIcon").innerHTML = ICON_CALL;
+  $("dial").setAttribute("aria-label", "Подзвонити");
+  setState("Подзвонити ще раз", "");
+  if (callStartedUtc) showResult();
+}
+
+/* --------------------------- що лишилось після --------------------------- */
+
+async function showResult() {
+  const c = current, since = callStartedUtc;
+  $("result").classList.add("on");
+  $("resultBody").innerHTML = `<div class="empty">Дивимось, що з'явилось у системі…</div>`;
+  // Останні кадри розмови ще можуть дописуватись — даємо їм секунду.
+  await new Promise(r => setTimeout(r, 1200));
+  let data = { bookings: [], messages: [] };
+  try {
+    data = await (await fetch(`/api/activity/${c.key}?since=${encodeURIComponent(since)}`)).json();
+  } catch {}
+
+  const parts = data.bookings.map(b => {
+    const det = b.details ? JSON.parse(b.details) : {};
+    const when = fmtWhen(b.starts_at, b.ends_at);
+    const rows = [
+      ["Клієнт", `${b.customer_name}, ${b.phone}`],
+      [c.intake.length ? "Куди" : "", det.address || ""],
+      ["Що", b.resource_label],
+      ["Коли", when],
+      ["Сума", `${nf.format(b.total_price)} ${c.currency}`],
+      ["Деталі", Object.entries(det).filter(([k]) => k !== "address").map(([, v]) => v).join(" · ")],
+    ].filter(([k, v]) => k && v);
+    return `<div class="rec">
+      <div class="rec-h"><span class="rec-title">Новий ${esc(c.action)}</span>
+        <span class="rec-ref">${esc(b.ref_code)}</span></div>
+      ${rows.map(([k, v]) => `<div class="rec-row"><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}
+    </div>`;
+  }).concat(data.messages.map(m => `
+    <div class="rec">
+      <div class="rec-h"><span class="rec-title">Запит на зворотний дзвінок</span></div>
+      <div class="rec-row"><b>Клієнт</b><span>${esc(m.customer_name)}, ${esc(m.phone)}</span></div>
+      <div class="rec-row"><b>Питання</b><span>${esc(m.topic)}</span></div>
+    </div>`));
+
+  $("resultBody").innerHTML = parts.length
+    ? parts.join('<div style="height:10px"></div>')
+    : `<div class="empty">За цю розмову нічого не записано — спробуйте довести діалог до запису.</div>`;
+}
+
+/* ------------------------------ старт ------------------------------ */
+
+$("dial").onclick = () => (pc ? hangUp() : call());
+
+(async function init() {
+  try {
+    CARDS = await (await fetch("/api/businesses")).json();
+  } catch {
+    note("Не вдалося завантажити список сфер.", true);
+    return;
+  }
+  if (!CARDS.length) { note("Жодної сфери не налаштовано.", true); return; }
+  select(CARDS[0]);
+})();
+</script>
+</body>
+</html>

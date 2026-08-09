@@ -24,6 +24,7 @@ STT перемикається через STT_PROVIDER:
 потім відкрий http://localhost:7860/client і натисни Connect (дозволь мікрофон).
 """
 
+import asyncio
 import os
 
 import agent_tools
@@ -281,6 +282,18 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     async def on_client_disconnected(transport, client):
         logger.info("Client disconnected")
         await worker.cancel()
+
+    # Демо-сторінка публічна, а кожна хвилина розмови коштує грошей. Ліміт
+    # тримаємо тут, а не тільки в інтерфейсі: вкладку можна просто не закрити.
+    max_call = int(os.getenv("MAX_CALL_SECONDS", "0"))
+    if max_call > 0:
+
+        async def hang_up_later() -> None:
+            await asyncio.sleep(max_call)
+            logger.info(f"Ліміт розмови {max_call}с вичерпано — завершую")
+            await worker.cancel()
+
+        asyncio.create_task(hang_up_later())
 
     runner = WorkerRunner(handle_sigint=False)
 

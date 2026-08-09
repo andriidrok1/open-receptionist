@@ -14,6 +14,7 @@
 Заклад береться з business.BUSINESS (один процес = один заклад = один телефон).
 """
 
+import json
 import os
 import re
 import sqlite3
@@ -133,6 +134,7 @@ def init_db() -> None:
                 customer_name TEXT NOT NULL,
                 phone         TEXT NOT NULL,
                 total_price   INTEGER NOT NULL,
+                details       TEXT,
                 created_at    TEXT NOT NULL DEFAULT (datetime('now'))
             )
             """
@@ -151,6 +153,10 @@ def init_db() -> None:
             """
         )
         _migrate(conn)
+        # details з'явилась пізніше за схему — доливаємо в старі бази.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(bookings)")}
+        if "details" not in cols:
+            conn.execute("ALTER TABLE bookings ADD COLUMN details TEXT")
         conn.commit()
 
 
@@ -204,6 +210,8 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
     if not hours:
         return "", "", f"цього дня заклад не працює; графік: {BOOK.hours_human()}"
     open_t, close_t = hours
+    if BOOK.is_round_clock(begin.date()):
+        return begin.strftime(_ISO_MIN), finish.strftime(_ISO_MIN), None
     if begin.time() < open_t:
         return "", "", f"цього дня відкриваємось о {open_t.strftime('%H:%M')}"
     if finish.time() > close_t or finish.date() != begin.date():
@@ -235,7 +243,9 @@ def free_slots(
     with _connect() as conn:
         for begin in slot_grid(day):
             finish = begin + timedelta(minutes=res.duration_min)
-            if begin < now or finish.time() > hours[1]:
+            if begin < now:
+                continue
+            if not BOOK.is_round_clock(day) and finish.time() > hours[1]:
                 continue
             busy = _occupied(conn, resource_key, begin.strftime(_ISO_MIN), finish.strftime(_ISO_MIN))
             if busy < res.capacity:
@@ -332,6 +342,7 @@ def create_booking(
     phone: str,
     end: str | None = None,
     party_size: int = 1,
+    details: dict | None = None,
 ) -> dict:
     """Створити запис. Перед вставкою ще раз перевіряє наявність."""
     phone, phone_error = validate_phone(phone)
@@ -339,6 +350,13 @@ def create_booking(
         return {"success": False, "error": phone_error}
     if not (customer_name and customer_name.strip()):
         return {"success": False, "error": "не вказано ім'я"}
+
+    # Обов'язкові поля галузі (адреса виїзду тощо) перевіряємо тут, а не
+    # покладаємось на промпт: запис без адреси для клінінгу — брак, а не дрібниця.
+    details = {k: v for k, v in (details or {}).items() if v and str(v).strip()}
+    missing = [f.label for f in BOOK.intake if f.required and not details.get(f.key)]
+    if missing:
+        return {"success": False, "error": "не вистачає даних: " + ", ".join(missing)}
 
     avail = check_availability(resource, start, end, party_size)
     if avail.get("error"):
@@ -355,8 +373,8 @@ def create_booking(
             """
             INSERT INTO bookings
                 (id, ref_code, resource, starts_at, ends_at, party_size,
-                 customer_name, phone, total_price)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 customer_name, phone, total_price, details)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 uuid.uuid4().hex,
@@ -368,6 +386,7 @@ def create_booking(
                 customer_name.strip(),
                 phone,
                 avail["total_price"],
+                json.dumps(details, ensure_ascii=False) if details else None,
             ),
         )
         conn.commit()
@@ -383,6 +402,7 @@ def create_booking(
         "phone": phone,
         "total_price": avail["total_price"],
         "currency": BIZ.currency,
+        **({"details": details} if details else {}),
     }
 
 
@@ -440,6 +460,7 @@ def list_bookings() -> list[dict]:
                 "units": _units_of(r),
                 "party_size": r["party_size"],
                 "total_price": r["total_price"],
+                "details": json.loads(r["details"]) if r["details"] else {},
                 "created_at": r["created_at"],
             }
         )

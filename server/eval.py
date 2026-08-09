@@ -284,6 +284,8 @@ S_DAY = next_weekday(1, min_days=2)  # найближчий вівторок —
 S_HOUR = 10
 S_BUSY_HOUR = 12
 S_PHONE = "0677774567"
+#: Послуга, на яку записується C1 — ставиться у _slot_scenarios під кожну галузь.
+BOOK_FIRST = None
 BUSY_STUB = "Зайнято Тестовий"  # ім'я броні-заглушки, якою забиваємо годину в C2
 
 
@@ -307,6 +309,11 @@ def checks_c1(log) -> list[tuple[bool, str]]:
          f"ціна {BOOK_FIRST.price} (є {b['total_price']})"),
         (_digits(b["phone"]) == S_PHONE, f"телефон {S_PHONE} (є {_digits(b['phone'])})"),
         (not _test_messages(), "зайвого запиту на дзвінок після запису немає"),
+        *[
+            (bool(b["details"].get(f.key)),
+             f"записано «{f.label}» (є {b['details'].get(f.key)!r})")
+            for f in BUSINESS.booking.intake if f.required
+        ],
     ]
     return out
 
@@ -349,15 +356,29 @@ def _closed_case(service_phrase: str) -> tuple[str, str]:
                 f"Запишіть мене на {service_phrase} {say_day(d)}, {say_time(11)}.",
                 "Вихідний день: запис не створюється",
             )
-    late = next_weekday(1, min_days=2)
+    if not BUSINESS.booking.is_round_clock(date.today()):
+        late = next_weekday(1, min_days=2)
+        return (
+            f"Запишіть мене на {service_phrase} {say_day(late)}, {say_time(22)}.",
+            "Час після закриття: запис не створюється",
+        )
+    # Цілодобовий заклад — «зачинено» не буває. Б'ємо в іншу межу: горизонт.
+    far = date.today() + timedelta(days=BUSINESS.booking.horizon_days + 25)
     return (
-        f"Запишіть мене на {service_phrase} {say_day(late)}, {say_time(22)}.",
-        "Час після закриття: запис не створюється",
+        f"Запишіть мене на {service_phrase} {say_day(far)}, {say_time(11)}.",
+        "Занадто далеко наперед: запис не створюється",
     )
 
 
-def _slot_scenarios(service_phrase: str, busy_service: str, offtopic: str) -> dict:
-    """Той самий кістяк для будь-якого закладу, що записує на час."""
+def _slot_scenarios(service_phrase: str, expect_key: str, busy_service: str,
+                    busy_key: str, offtopic: str, extra: str = "") -> dict:
+    """Той самий кістяк для будь-якого закладу, що записує на час.
+
+    extra — реплика з даними, які вимагає опитування галузі (адреса тощо):
+    без них create_booking законно відмовить, і сценарій перевірятиме не те.
+    """
+    global BOOK_FIRST
+    BOOK_FIRST = BUSINESS.booking.resource(expect_key)
     closed_turn, closed_title = _closed_case(service_phrase)
     return {
         "C1": {
@@ -365,7 +386,7 @@ def _slot_scenarios(service_phrase: str, busy_service: str, offtopic: str) -> di
             "turns": [
                 f"Доброго дня! Хочу записатися на {service_phrase} "
                 f"{say_day(S_DAY)}, {say_time(S_HOUR)}.",
-                _s_name_turn(),
+                _s_name_turn() + (f" {extra}" if extra else ""),
             ],
             "auto_confirm": True, "done": _booked, "checks": checks_c1,
         },
@@ -375,7 +396,7 @@ def _slot_scenarios(service_phrase: str, busy_service: str, offtopic: str) -> di
                 f"Хочу {busy_service} {say_day(S_DAY)}, {say_time(S_BUSY_HOUR)}.",
             ],
             "auto_confirm": False, "done": None, "checks": checks_c2,
-            "prepare": busy_service,
+            "prepare": busy_key,
         },
         "C3": {
             "title": closed_title,
@@ -390,37 +411,54 @@ def _slot_scenarios(service_phrase: str, busy_service: str, offtopic: str) -> di
     }
 
 
-SCENARIOS_BY_BUSINESS = {
-    "hotel": HOTEL_SCENARIOS,
-    "clinic": _slot_scenarios(
-        "професійну чистку", "видалити зуб",
-        "Скажіть, а ви приймаєте страховку і чи можна прийти з гострим болем зараз?",
+# Набір сценаріїв будується для АКТИВНОГО закладу: _slot_scenarios чіпляється до
+# BUSINESS (опитування, графік, ресурси), тому зібрати всі п'ять одночасно не можна.
+_SLOT_VERTICALS = {
+    "clinic": dict(
+        service_phrase="професійну чистку", expect_key="cleaning", busy_service="видалити зуб", busy_key="extraction",
+        offtopic="Скажіть, а ви приймаєте страховку і чи можна прийти з гострим болем зараз?",
     ),
-    "barbershop": _slot_scenarios(
-        "стрижку", "комплекс",
-        "А можна записатися саме до Дениса, і чи є у вас подарункові сертифікати?",
+    "barbershop": dict(
+        service_phrase="стрижку", expect_key="haircut", busy_service="комплекс", busy_key="combo",
+        offtopic="А можна записатися саме до Дениса, і чи є у вас подарункові сертифікати?",
+    ),
+    "cleaning": dict(
+        service_phrase="прибирання двокімнатної", expect_key="regular_2",
+        busy_service="прибрати трикімнатну", busy_key="regular_3",
+        offtopic="А ви прибираєте офіси і скільки коштує помити вікна?",
+        extra="Адреса — Хрещатик двадцять два, квартира п'ять.",
+    ),
+    "emergency": dict(
+        service_phrase="сантехніка", expect_key="plumber",
+        busy_service="відкрити двері, я загубив ключі", busy_key="locksmith",
+        offtopic="У квартирі пахне газом, що робити?",
+        extra="Адреса — Хрещатик двадцять два, квартира п'ять, тече труба під раковиною.",
     ),
 }
-
-# Послуга, на яку записується C1 (перевіряємо ціну й ключ) — перша в конфігу,
-# крім готелю, де сценарії свої.
-BOOK_FIRST = None
-if BUSINESS.booking.resources:
-    _by_label = {r.label.lower(): r for r in BUSINESS.booking.resources}
-    BOOK_FIRST = _by_label.get("професійна чистка") or _by_label.get("стрижка")
+SCENARIOS_BY_BUSINESS = {"hotel": HOTEL_SCENARIOS}
+if BUSINESS.key in _SLOT_VERTICALS:
+    SCENARIOS_BY_BUSINESS[BUSINESS.key] = _slot_scenarios(**_SLOT_VERTICALS[BUSINESS.key])
 
 
-def _prepare_busy(service_phrase: str) -> None:
-    """Забити годину, яку в C2 попросить клієнт — стільки разів, скільки місць."""
-    key = crm.normalize_resource(service_phrase)
-    res = BUSINESS.booking.resource(key)
+def _prepare_busy(resource_key: str) -> None:
+    """Забити годину, яку в C2 попросить клієнт — стільки разів, скільки місць.
+
+    Ресурс задаємо ключем, а не фразою: розмовну форму («прибрати трикімнатну»)
+    словник синонімів може й не впізнати, і тоді сценарій тихо перевіряв би не те.
+    """
+    res = BUSINESS.booking.resource(resource_key)
+    assert res, f"немає ресурсу {resource_key} у {BUSINESS.key}"
     for _ in range(res.capacity):
-        crm.create_booking(
+        # Обов'язкові поля галузі підставляємо й тут: без адреси клінінг законно
+        # відмовить, заглушка не створиться, і C2 тихо перевірятиме вільну годину.
+        out = crm.create_booking(
             resource=res.label,
             start=f"{S_DAY.isoformat()}T{S_BUSY_HOUR:02d}:00",
             customer_name=BUSY_STUB,
             phone="0501112233",
+            details={f.key: "для тесту" for f in BUSINESS.booking.intake},
         )
+        assert out.get("success"), f"не вдалось забити годину: {out}"
 
 
 def run_business(key: str, names: list[str]) -> dict[str, list[tuple[bool, str]]]:
@@ -457,7 +495,7 @@ def main() -> int:
         import subprocess
 
         failed = 0
-        for key in SCENARIOS_BY_BUSINESS:
+        for key in ["hotel", *_SLOT_VERTICALS]:
             print(f"\n\n{'#' * 60}\n# {key}\n{'#' * 60}")
             failed += subprocess.call(
                 [sys.executable, __file__, "--business", key, *names]) != 0

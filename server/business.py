@@ -61,6 +61,21 @@ class Resource:
 
 
 @dataclass(frozen=True)
+class IntakeField:
+    """Що ще треба спитати, крім часу й імені.
+
+    Виїзні послуги (клінінг, аварійка, замір на ремонт) без адреси безглузді:
+    запис є, а куди їхати — невідомо. Набір полів у кожної галузі свій, тому
+    він живе в YAML і звідти ж потрапляє і в промпт, і в схему інструмента.
+    """
+
+    key: str
+    label: str
+    description: str = ""
+    required: bool = True
+
+
+@dataclass(frozen=True)
 class BookingConfig:
     """Як саме цей заклад приймає записи."""
 
@@ -83,6 +98,7 @@ class BookingConfig:
     horizon_days: int = 365
     hours: dict[str, str | None] = field(default_factory=dict)
     resources: tuple[Resource, ...] = ()
+    intake: tuple[IntakeField, ...] = ()
 
     @property
     def is_slots(self) -> bool:
@@ -118,6 +134,32 @@ class BookingConfig:
         start_s, _, end_s = str(raw).partition("-")
         return time.fromisoformat(start_s.strip()), time.fromisoformat(end_s.strip())
 
+    def is_round_clock(self, day: date) -> bool:
+        """Цілодобовий день. Потрібне аварійці: виклик о 23:30 не має впиратись
+        у «не встигає до закриття» — саме вночі такі дзвінки й бувають."""
+        h = self.hours_for(day)
+        return bool(h) and h[0] == time(0, 0) and h[1] >= time(23, 59)
+
+    def hours_compact(self) -> str:
+        """Графік для картки: «пн–пт 09:00–19:00 · сб 10:00–15:00 · нд вихідний».
+        Сусідні однакові дні склеюються — інакше виходить простирадло на сім рядків."""
+        if not self.hours:
+            return ""
+        short = ("пн", "вт", "ср", "чт", "пт", "сб", "нд")
+        groups: list[list] = []
+        for i, key in enumerate(WEEKDAYS):
+            raw = self.hours.get(key)
+            val = str(raw).replace("-", "–") if raw else "вихідний"
+            if groups and groups[-1][2] == val:
+                groups[-1][1] = i
+            else:
+                groups.append([i, i, val])
+        if len(groups) == 1 and groups[0][2].startswith("00:00"):
+            return "цілодобово, без вихідних"
+        return " · ".join(
+            f"{short[a] if a == b else short[a] + '–' + short[b]} {val}" for a, b, val in groups
+        )
+
     def hours_human(self) -> str:
         """Графік одним рядком — для промпта («пн–пт 09:00–19:00, сб 10:00–16:00»)."""
         parts = []
@@ -144,6 +186,9 @@ class Business:
     speech_recap: str  # як звучить переказ запису перед підтвердженням
     escalation_examples: str
     keyterms: tuple[str, ...]
+    demo_tab: str  # коротка назва галузі для вкладки демо
+    demo_intro: str  # що написано на демо-сторінці про це заведення
+    demo_try: tuple[str, ...]  # підказки «спробуйте сказати»
     booking: BookingConfig
 
     @property
@@ -218,6 +263,15 @@ def load_business(key: str | None = None) -> Business:
         horizon_days=int(b.get("horizon_days", 365)),
         hours={k: b.get("hours", {}).get(k) for k in WEEKDAYS} if b.get("hours") else {},
         resources=_resources(b.get("resources")),
+        intake=tuple(
+            IntakeField(
+                key=f["key"],
+                label=f["label"],
+                description=f.get("description", ""),
+                required=bool(f.get("required", True)),
+            )
+            for f in (b.get("intake") or [])
+        ),
     )
     return Business(
         key=d.get("key") or path.stem,
@@ -239,6 +293,9 @@ def load_business(key: str | None = None) -> Business:
         speech_recap=(d.get("speech") or {}).get("recap", "").strip(),
         escalation_examples=d.get("escalation_examples", "питання поза записом"),
         keyterms=tuple(d.get("keyterms") or ()),
+        demo_tab=((d.get("demo") or {}).get("tab") or d.get("key") or "").strip(),
+        demo_intro=((d.get("demo") or {}).get("intro") or "").strip(),
+        demo_try=tuple((d.get("demo") or {}).get("try") or ()),
         booking=booking,
     )
 
@@ -303,6 +360,26 @@ def _phone_rules(biz: Business) -> str:
 вигадуй номер: перепитай його ще раз."""
 
 
+def _intake_rules(biz: Business) -> str:
+    """Додаткові питання галузі — по одному за раз, а не анкетою."""
+    fields = biz.booking.intake
+    if not fields:
+        return ""
+    lines = "\n".join(
+        "   - {}{}{}".format(
+            f.label,
+            " (обов'язково)" if f.required else " (якщо скаже сам)",
+            f" — {f.description}" if f.description else "",
+        )
+        for f in fields
+    )
+    return (
+        "\n   Також дізнайся:\n" + lines
+        + "\n   Питай по одному за раз, у розмові, а не списком підряд — це дзвінок,"
+        "\n   а не анкета. Що вже прозвучало саме — не перепитуй."
+    )
+
+
 def _booking_flow(biz: Business) -> str:
     """Сценарій запису. Кроки однакові, різниця лише в тому, що збираємо:
     інтервал діб (готель) чи дату+час (клініка, барбершоп)."""
@@ -333,14 +410,17 @@ def _booking_flow(biz: Business) -> str:
 
     return f"""{bk.action.upper()} — працюй ТІЛЬКИ через інструменти, не вигадуй наявність і ціни:
 {collect}
-3. Якщо вільно і {cust_nom} згоден — попроси ім'я та номер телефону.
+3. Якщо вільно і {cust_nom} згоден — попроси ім'я та номер телефону.{_intake_rules(biz)}
 {_phone_rules(biz)}
 4. Перед створенням ОБОВ'ЯЗКОВО повтори вголос усі деталі разом:
    («{recap}»)
    Телефон тут повторно НЕ називай — його вже підтвердили на кроці 3.
    НЕ скорочуй це до одного питання про ціну — {cust_nom} має почути все.
 5. ТІЛЬКИ після усного «так» на повний переказ виклич create_booking.
-   Потім назви номер (ref_code) чітко, як звичайне число, і подякуй — усе одним
+   Щойно він повернув success — БІЛЬШЕ НЕ ВИКЛИКАЙ ЖОДНОГО ІНСТРУМЕНТА в цьому
+   ході. Ні take_message (запис уже створено, дублювати його запитом на дзвінок
+   означає гнати колег на зайвий передзвін), ні повторний create_booking.
+   Просто назви номер (ref_code) чітко, як звичайне число, і подякуй — усе одним
    плавним реченням.
 Якщо вільного місця немає — вибачся і запропонуй інший час або інший варіант.
 
