@@ -55,8 +55,9 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
 )
 from pipecat.turns.types import ProcessFrameResult
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
-from pipecat.runner.types import RunnerArguments
+from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService, CommitStrategy
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.llm_service import FunctionCallParams
@@ -66,6 +67,7 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
+from speech_text import UkrainianSpeechFilter
 
 load_dotenv(override=True)
 
@@ -77,19 +79,40 @@ HOTEL_NAME = os.getenv("HOTEL_NAME", "готель «Дніпро»")
 def build_system_prompt() -> str:
     today = date.today().isoformat()
     return f"""Ти — Оксана, адміністратор на ресепшені ({HOTEL_NAME}).
-Розмовляй природною українською мовою. Твої відповіді ОЗВУЧУЮТЬСЯ вголос, тому:
-не використовуй емодзі, списки, дужки, зірочки чи будь-яке форматування — лише
-звичайні речення, які легко вимовити. Ціни називай словами природно
-(наприклад «тисяча вісімсот гривень за ніч»).
+Розмовляй природною українською мовою.
 
-Відповідай ОДНИМ коротким плавним висловлюванням, як у живій телефонній
-розмові. НЕ розбивай думку на кілька окремих коротких речень поспіль —
-уривчасті фрази звучать роботизовано. Наприклад, замість «Готово. Номер
-броні сто двадцять три. Дякую.» скажи одним подихом: «Чудово, вашу бронь
-підтверджено, номер броні сто двадцять три, дякуємо, що обрали нас». В одній
-репліці — МАКСИМУМ ОДНЕ питання; ніколи не став два питання поспіль і не
-перефразовуй одне й те саме питання двічі. Без пустих вступів («Дякую за
-інформацію») — одразу суть. Будь теплою й доброзичливою, але по суті.
+ГОВОРИ, А НЕ ПИШИ. Твій текст читає синтезатор мовлення, і він озвучує саме те,
+як написано: кожна кома — це пауза. Тому фрази з письмової мови звучать
+роботизовано, скільки б їх не «оживляли» налаштуваннями голосу.
+
+Погано (так пишуть): «Отже, номер Покращений на двох, з чотирнадцятого по
+сімнадцяте липня, три ночі. Разом п'ять тисяч чотириста гривень.
+Підтверджуєте бронювання?»
+Добре (так говорять): «Так, дивлюся — Покращений на двох є, з чотирнадцятого
+по сімнадцяте. Три ночі, п'ять тисяч чотириста. Бронюємо?»
+
+Правила усного мовлення:
+- Не нанизуй усе через коми. Коротка фраза, крапка, наступна фраза.
+- Викидай канцелярит: «Отже», «Разом становить», «Підтверджуєте бронювання?»,
+  «Чи можу я вам допомогти». Кажи як людина: «Так», «Дивлюся», «Є»,
+  «Добре», «Бронюємо?». Прохання формулюй прохінням, а не питанням про себе:
+  «Підкажіть ваше ім'я та телефон», НЕ «Записала ім'я та телефон?».
+- Тире й три крапки — твої інструменти інтонації: «Три ночі — п'ять тисяч
+  чотириста», «Зараз гляну...».
+- Числа, дати й ціни — тільки словами, ніколи цифрами. Як саме промовити
+  число, вирішуй сама, за живою мовою: «п'ять тисяч чотириста», «сімсот
+  сімдесят сім», «чотирнадцятого липня». Головне — щоб це легко впізнавалось
+  на слух, а не було ланцюжком окремих цифр.
+- Не дроби думку на обрубки й не повторюй те саме двома способами.
+- В одній репліці МАКСИМУМ ОДНЕ питання. Ніколи не став два питання поспіль.
+- Без порожніх вступів («Дякую за інформацію») — одразу суть.
+- Ніяких емодзі, списків, дужок, зірочок — лише те, що можна вимовити.
+
+Якщо в репліці потрібна відчутна пауза (перед ціною, між блоками цифр
+телефону) — постав тег <break time="0.4s" />. МАКСИМУМ ДВА такі теги на
+репліку, інакше мовлення розганяється. Здебільшого досить крапки або тире.
+
+Будь теплою й доброзичливою, але по суті.
 
 НІКОЛИ не оголошуй перевірку окремою реплікою і не чекай згоди гостя на неї.
 Якщо в тебе вже є дати, тип номера і кількість гостей — ВИКЛИКАЙ інструмент
@@ -111,16 +134,20 @@ def build_system_prompt() -> str:
    Питай лише те, чого справді бракує.
 2. Виклич check_availability, щоб дізнатися наявність і повну вартість. Назви їх гостю.
 3. Якщо вільно і гість згоден — попроси ім'я та номер телефону. Телефон
-   ОБОВ'ЯЗКОВО повтори вголос КОЖНУ ЦИФРУ ОКРЕМО, одну за одною: для
-   0632096974 — «нуль, шість, три, два, нуль, дев'ять, шість, дев'ять, сім,
-   чотири». НІКОЛИ не об'єднуй цифри у складені числа («двісті дев'ять»,
-   «шістдесят дев'ять») — це плутає гостя. Тільки окремі цифри. Спитай, чи
-   правильно записала. Якщо гість виправляє — повтори виправлений номер знову
-   так само, по одній цифрі.
+   ОБОВ'ЯЗКОВО повтори вголос, але промовляй його так, як це роблять люди —
+   групами, а не по одній цифрі: 0632096974 — «нуль шістдесят три
+   <break time="0.4s" /> двісті дев'ять <break time="0.4s" /> шістдесят дев'ять
+   сімдесят чотири». Сама вирішуй, як розбити номер на групи, аби його було
+   легко впізнати на слух. Ланцюжок окремих цифр звучить монотонно, і гість у
+   ньому губиться. Спитай, чи правильно записала, і дочекайся підтвердження.
+   В інструмент передавай номер ЦИФРАМИ (0632096974), а не словами.
+   Якщо гість виправляє — повтори виправлений номер так само, групами.
+   Якщо інструмент повернув помилку про кількість цифр — не сперечайся й не
+   вигадуй номер: перепитай його в гостя ще раз.
 4. Перед створенням броні ОБОВ'ЯЗКОВО повтори вголос деталі разом: тип
    номера, дати заїзду і виїзду, кількість гостей, ім'я та повну вартість
-   («Отже, покращений номер з чотирнадцятого по сімнадцяте липня, двоє гостей,
-   на ім'я Тарас, разом п'ять тисяч чотириста гривень — підтверджуєте?»).
+   («Записую Покращений на двох, з чотирнадцятого по сімнадцяте липня, на
+   Тараса. Три ночі <break time="0.4s" /> п'ять тисяч чотириста. Все вірно?»).
    Телефон тут повторно НЕ називай — його вже підтвердили на кроці 3.
    НЕ скорочуй це до одного питання про ціну — гість має почути всю бронь.
 5. ТІЛЬКИ після усного «так» на повний переказ броні виклич create_booking.
@@ -316,18 +343,28 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             ),
         )
 
-    # --- Text-to-Speech: ElevenLabs (Sarah, flash v2.5 — низька затримка) ---
-    # Звучить помітно живіше за OpenAI TTS українською. speed 0.95 = трохи
-    # повільніше за замовчування. Без ELEVENLABS_API_KEY — відкат на OpenAI.
+    # --- Text-to-Speech: ElevenLabs (Kateryna Pavlenko, flash v2.5 — низька затримка) ---
+    # Голос обраний на слух із бібліотеки: нативний український + мітка
+    # conversational (донор говорить, а не начитує книгу — звідси жива інтонація).
+    # stability 0.4: нижче за дефолт 0.5 — інтонація гуляє живіше, але лишається
+    # передбачуваною. style тримаємо на 0 — він додає затримки, а бюджет розмови
+    # і так напружений. Без ELEVENLABS_API_KEY — відкат на OpenAI.
     if elevenlabs_key:
         tts = ElevenLabsTTSService(
             api_key=elevenlabs_key,
             settings=ElevenLabsTTSService.Settings(
-                voice=os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL"),  # Sarah
+                voice=os.getenv("ELEVENLABS_VOICE_ID", "bsourKGZEagmttzrIzmu"),  # Kateryna Pavlenko
                 model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
                 language=Language.UK,
                 speed=float(os.getenv("ELEVENLABS_SPEED", "0.95")),
+                stability=float(os.getenv("ELEVENLABS_STABILITY", "0.4")),
+                style=float(os.getenv("ELEVENLABS_STYLE", "1.0")),
             ),
+            # Без цього break-теги поїдуть у модель як звичайний текст.
+            enable_ssml_parsing=True,
+            # Наголоси + санітайзер пауз. Фільтри застосовуються вже після
+            # склейки речень, тобто бачать цілу репліку, а не уривок стріму.
+            text_filters=[UkrainianSpeechFilter()],
         )
     else:
         tts = OpenAITTSService(
@@ -400,18 +437,19 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ]
     )
 
-    worker = PipelineWorker(
-        pipeline,
-        params=PipelineParams(
-            enable_metrics=True,
-            enable_usage_metrics=True,
-        ),
-        observers=[],
-    )
+    # Телефонія (Twilio та інші) шле 8 кГц mono — якщо не сказати про це
+    # пайплайну, кожен кадр ресемплиться туди-сюди, а голос гугнявить.
+    is_phone = isinstance(runner_args, WebSocketRunnerArguments)
+    pipeline_params = PipelineParams(enable_metrics=True, enable_usage_metrics=True)
+    if is_phone:
+        pipeline_params.audio_in_sample_rate = 8000
+        pipeline_params.audio_out_sample_rate = 8000
+        logger.info("Телефонний режим: 8 кГц")
 
-    @worker.rtvi.event_handler("on_client_ready")
-    async def on_client_ready(rtvi):
-        # Перше слово — за агентом: коротке привітання українською.
+    worker = PipelineWorker(pipeline, params=pipeline_params, observers=[])
+
+    async def greet_first() -> None:
+        """Перше слово — за агентом: коротке привітання українською."""
         context.add_message(
             {
                 "role": "developer",
@@ -423,9 +461,19 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         )
         await worker.queue_frames([LLMRunFrame()])
 
+    # У браузері вітаємось, коли RTVI-клієнт готовий. У телефонії RTVI-клієнта
+    # немає взагалі — там сигнал один: підключився транспорт (пішов дзвінок).
+    if not is_phone:
+
+        @worker.rtvi.event_handler("on_client_ready")
+        async def on_client_ready(rtvi):
+            await greet_first()
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Client connected")
+        if is_phone:
+            await greet_first()
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
@@ -441,11 +489,21 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 async def bot(runner_args: RunnerArguments):
     """Main bot entry point."""
 
+    # Телефонні транспорти: серіалізатор (і формат аудіо) Pipecat підставляє сам,
+    # визначивши провайдера з першого повідомлення у вебсокеті.
+    phone_params = lambda: FastAPIWebsocketParams(  # noqa: E731
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        add_wav_header=False,
+    )
     transport_params = {
         "webrtc": lambda: TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
         ),
+        "twilio": phone_params,
+        "telnyx": phone_params,
+        "plivo": phone_params,
     }
 
     transport = await create_transport(runner_args, transport_params)
