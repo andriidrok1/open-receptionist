@@ -105,7 +105,7 @@ def api_activity(key: str, since: str = "") -> JSONResponse:
     """
     path = demo_db(key)
     if key not in DEMO_BUSINESSES or not path.exists():
-        return JSONResponse({"bookings": [], "messages": []})
+        return JSONResponse({"bookings": [], "messages": [], "events": []})
 
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
@@ -127,15 +127,23 @@ def api_activity(key: str, since: str = "") -> JSONResponse:
                 (since,),
             )
         ]
+        events = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT kind, detail, created_at FROM events WHERE created_at >= ?"
+                " ORDER BY created_at LIMIT 20",
+                (since,),
+            )
+        ]
     except sqlite3.OperationalError:
-        bookings, messages = [], []  # база ще порожня, таблиць немає
+        bookings, messages, events = [], [], []  # база ще порожня, таблиць немає
     finally:
         conn.close()
 
     labels = {r.key: r.label for r in load_business(key).booking.resources}
     for b in bookings:
         b["resource_label"] = labels.get(b["resource"], b["resource"])
-    return JSONResponse({"bookings": bookings, "messages": messages})
+    return JSONResponse({"bookings": bookings, "messages": messages, "events": events})
 
 
 if __name__ == "__main__":

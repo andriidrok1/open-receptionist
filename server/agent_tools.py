@@ -174,7 +174,14 @@ def call_tool(name: str, args: dict) -> dict:
 
 
 def register(llm, logger=None) -> None:
-    """Прив'язати хендлери до LLM-сервісу pipecat."""
+    """Прив'язати хендлери до LLM-сервісу pipecat (шлях живого бота).
+
+    Кожен виклик пишеться в журнал подій: демо-сторінка робить з нього стрічку
+    «що зробила Оксана». Через RTVI це не працює — server-message із хвоста
+    пайплайна до клієнта не доходить, а вигадувати обхід заради демо дорожче,
+    ніж рядок у базі, який згодом стане журналом дзвінків для закладу.
+    Eval сюди не заходить (він кличе call_tool напряму), тож тести не засмічує.
+    """
 
     def make(name: str):
         async def handler(params):
@@ -182,6 +189,7 @@ def register(llm, logger=None) -> None:
             result = call_tool(name, args)
             if logger:
                 logger.info(f"[tool] {name}({args}) -> {result}")
+            crm.log_event(name, result.get("ref_code") or result.get("error"))
             await params.result_callback(result)
 
         return handler

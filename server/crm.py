@@ -152,6 +152,18 @@ def init_db() -> None:
             )
             """
         )
+        # Журнал дій агента: що він робив під час дзвінка. Потрібен демо-сторінці
+        # (стрічка «що зробила Оксана») і згодиться як основа журналу дзвінків.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id         TEXT PRIMARY KEY,
+                kind       TEXT NOT NULL,
+                detail     TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         _migrate(conn)
         # details з'явилась пізніше за схему — доливаємо в старі бази.
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(bookings)")}
@@ -404,6 +416,29 @@ def create_booking(
         "currency": BIZ.currency,
         **({"details": details} if details else {}),
     }
+
+
+def log_event(kind: str, detail: str | None = None) -> None:
+    """Записати дію агента. Тихо ковтає помилки: журнал не має ламати дзвінок."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO events (id, kind, detail) VALUES (?, ?, ?)",
+                (uuid.uuid4().hex, kind, detail),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        pass
+
+
+def list_events(since: str = "") -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT kind, detail, created_at FROM events WHERE created_at >= ?"
+            " ORDER BY created_at",
+            (since,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def take_message(customer_name: str, phone: str, topic: str) -> dict:

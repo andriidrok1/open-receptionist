@@ -236,6 +236,8 @@ function fmtWhen(startsAt, endsAt) {
 let CARDS = [], current = null;
 let pc = null, dc = null, micStream = null, pingTimer = null, tickTimer = null;
 let callStartedUtc = null, seconds = 0, liveBubble = null, botBubble = null;
+let seenSegments = new Set(), seenEvents = 0, pollTimer = null;
+let botSpeaking = false, thinkingTimer = null;
 
 const ICON_CALL = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/>';
 const ICON_HANGUP = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/><path d="M3 3l18 18"/>';
@@ -331,36 +333,75 @@ function bubble(who, text, live = false) {
   box.scrollTop = box.scrollHeight;
 }
 
-function action(name) {
+function action(name, ref) {
   const label = ACTION_LABEL[name];
   if (!label) return;
   $("acts").appendChild(el(`
-    <div class="act"><i><svg viewBox="0 0 24 24"><path d="M4 12l6 6L20 6"/></svg></i>${esc(label)}</div>`));
+    <div class="act"><i><svg viewBox="0 0 24 24"><path d="M4 12l6 6L20 6"/></svg></i>${
+      esc(label)}${/^[А-ЯA-Z]{2}-\d+$/.test(ref || "") ? ` <b style="font-weight:600">${esc(ref)}</b>` : ""}</div>`));
 }
+
+/** ?debug=1 — вивалювати типи подій у консоль. Коли демо мовчить на чужій
+ *  машині, це перше, що треба побачити: доходять події взагалі чи ні. */
+const DEBUG = new URLSearchParams(location.search).has("debug");
 
 function onRtvi(raw) {
   let m; try { m = JSON.parse(raw); } catch { return; }
+  if (DEBUG) console.log("RTVI", m.type, JSON.stringify(m.data || {}).slice(0, 120));
   if (m.label !== "rtvi-ai") return;
   const d = m.data || {};
   switch (m.type) {
     case "user-transcription":
       if (d.text) bubble("me", d.text, !d.final);
       break;
-    case "bot-transcription":
-      if (d.text) bubble("bot", d.text);
+    // Репліки бота беремо з bot-output, а не з bot-transcription: друге
+    // приходить не для кожного речення, і частина відповіді просто зникала.
+    // Одне речення шлеться кілька разів (оновлюється статус «сказано») —
+    // тому дедуп по segment_id.
+    case "bot-output": {
+      if (!d.text || d.will_be_spoken === false || seenSegments.has(d.segment_id)) break;
+      seenSegments.add(d.segment_id);
+      // bot-output — це сирий текст LLM, разом із break-тегами для синтезатора.
+      // На екрані вони не потрібні, а огризки з самої пунктуації пропускаємо.
+      const clean = d.text.replace(/<break[^>]*>/gi, " ").replace(/\s+/g, " ").trim();
+      if (/[\p{L}\p{N}]/u.test(clean)) bubble("bot", clean);
       break;
-    case "llm-function-call":
-    case "llm-function-call-started":
-      action(d.function_name || d.name);
+    }
+
+    // Нова відповідь LLM = нова репліка. Без цієї межі обірване привітання
+    // склеювалось із наступною відповіддю в одну довгу бульбашку.
+    case "bot-llm-started":
+    case "bot-interrupted":
+      botBubble = null;
       break;
     case "bot-started-speaking":
+      botSpeaking = true;
+      clearTimeout(thinkingTimer);
       setState("Говорить " + current.agent, "перебивайте, коли захочете");
       break;
     case "user-transcription-final-marker":
       break;
-    case "bot-stopped-speaking":
     case "user-started-speaking":
       botBubble = null;  // наступне речення бота піде вже новою реплікою
+      clearTimeout(thinkingTimer);
+      setState("Слухаю", "говоріть звичайним голосом");
+      break;
+    // Між «людина замовкла» і першим словом відповіді проходить секунда-дві.
+    // Без явного стану ця пауза читається як «воно мене не почуло».
+    case "user-stopped-speaking":
+      // Поки бот говорить, «Обробляю…» — брехня: VAD ловить і власне відлуння,
+      // і шум у кімнаті. А якщо відповідь так і не прийшла за 8 секунд, надпис
+      // однаково треба зняти, інакше він виглядає як зависання.
+      if (botSpeaking) break;
+      setState("Обробляю…", "секунду");
+      clearTimeout(thinkingTimer);
+      thinkingTimer = setTimeout(
+        () => setState("Слухаю", "говоріть звичайним голосом"), 8000);
+      break;
+    case "bot-stopped-speaking":
+      botSpeaking = false;
+      botBubble = null;
+      clearTimeout(thinkingTimer);
       setState("Слухаю", "говоріть звичайним голосом");
       break;
   }
@@ -387,7 +428,8 @@ async function call() {
   note("");
   $("talk").classList.add("on");
   $("result").classList.remove("on");
-  $("bubbles").innerHTML = ""; $("acts").innerHTML = ""; liveBubble = botBubble = null;
+  $("bubbles").innerHTML = ""; $("acts").innerHTML = "";
+  liveBubble = botBubble = null; seenSegments = new Set(); botSpeaking = false;
   setState("З'єднуємось…");
   $("dial").disabled = true;
 
@@ -447,7 +489,21 @@ async function call() {
   $("dialIcon").innerHTML = ICON_HANGUP;
   $("dial").setAttribute("aria-label", "Покласти трубку");
   setState("Говоріть", "натисніть ще раз, щоб покласти трубку");
+  seenEvents = 0;
+  pollTimer = setInterval(pollEvents, 2000);
   startTimer();
+}
+
+/** Стрічка дій під час розмови. RTVI про виклики інструментів не повідомляє,
+ *  тому дивимось у журнал, який пише сам бот. */
+async function pollEvents() {
+  try {
+    const r = await fetch(
+      `/api/activity/${current.key}?since=${encodeURIComponent(callStartedUtc)}`);
+    const { events = [] } = await r.json();
+    for (const e of events.slice(seenEvents)) action(e.kind, e.detail);
+    seenEvents = events.length;
+  } catch {}
 }
 
 function startTimer() {
@@ -467,6 +523,8 @@ function startTimer() {
 }
 
 function hangUp() {
+  clearTimeout(thinkingTimer); thinkingTimer = null;
+  clearInterval(pollTimer); pollTimer = null;
   clearInterval(pingTimer); pingTimer = null;
   clearInterval(tickTimer); tickTimer = null;
   $("timer").textContent = ""; $("timer").classList.remove("warn");
