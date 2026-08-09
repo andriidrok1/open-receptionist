@@ -77,6 +77,34 @@ def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
     return digits, None
 
 
+#: Слова, якими модель затикає обов'язкове поле імені, коли його не спитала.
+_PLACEHOLDER_NAMES = {
+    "гість", "гости", "гостя", "клієнт", "клиент", "пацієнт", "пациент",
+    "guest", "client", "customer", "невідомо", "не вказано", "анонім", "n/a", "-",
+}
+
+
+def validate_name(raw: str | None) -> tuple[str | None, str | None]:
+    """Перевірити ім'я. Повертає (ім'я, помилка).
+
+    Навіщо: якщо ім'я не прозвучало, модель охоче підставляє в обов'язкове поле
+    заглушку — «Гість». Формально запис створено, фактично готель отримує бронь
+    невідомо на кого. Просити модель у промпті «не вигадуй» недостатньо: це
+    ловиться детерміновано, тому ловиться тут.
+    """
+    name = (raw or "").strip()
+    if not name:
+        return None, "не вказано ім'я"
+    if len(name) < 2 or not re.search(r"[^\W\d_]", name, re.UNICODE):
+        return None, "ім'я виглядає порожнім — спитай, як до людини звертатися"
+    if name.lower().strip(".,!") in _PLACEHOLDER_NAMES:
+        return None, (
+            f"«{name}» — це не ім'я. Ти не спитала, як до людини звертатися: "
+            "спитай і передай те, що вона назве"
+        )
+    return name, None
+
+
 def normalize_resource(raw: str) -> str | None:
     """Усна назва послуги/типу номера → канонічний ключ конфігу."""
     return BOOK.normalize_resource(raw)
@@ -366,8 +394,9 @@ def create_booking(
     phone, phone_error = validate_phone(phone)
     if phone_error:
         return {"success": False, "error": phone_error}
-    if not (customer_name and customer_name.strip()):
-        return {"success": False, "error": "не вказано ім'я"}
+    customer_name, name_error = validate_name(customer_name)
+    if name_error:
+        return {"success": False, "error": name_error}
 
     # Обов'язкові поля галузі (адреса виїзду тощо) перевіряємо тут, а не
     # покладаємось на промпт: запис без адреси для клінінгу — брак, а не дрібниця.
@@ -401,7 +430,7 @@ def create_booking(
                 avail["starts_at"],
                 avail["ends_at"],
                 party_size,
-                customer_name.strip(),
+                customer_name,
                 phone,
                 avail["total_price"],
                 json.dumps(details, ensure_ascii=False) if details else None,
@@ -416,7 +445,7 @@ def create_booking(
         "starts_at": avail["starts_at"],
         "ends_at": avail["ends_at"],
         "party_size": party_size,
-        "customer_name": customer_name.strip(),
+        "customer_name": customer_name,
         "phone": phone,
         "total_price": avail["total_price"],
         "currency": BIZ.currency,
