@@ -360,6 +360,20 @@ function bubble(who, text) {
  *  сегмент шлеться двічі: коли поставлений у чергу і коли озвучений). Тому
  *  тримаємо їх у списку і щоразу перезбираємо текст за segment_id — інакше
  *  ціна опиняється перед фразою, до якої вона належить. */
+/** Прибрати службову розмітку з тексту, який показуємо на екрані.
+ *
+ *  Чистити треба ПІСЛЯ склейки: репліка приходить шматками, і тег пауз легко
+ *  розривається навпіл («<break time="0.» + «4s" />»). Кожен шматок окремо під
+ *  шаблон не підпадає, і на екран лізе «0. 4s». */
+function cleanSpeech(t) {
+  return String(t)
+    .replace(/<[^>]*>/g, " ")   // цілі теги
+    .replace(/<[^>]*$/, " ")    // обірваний тег у кінці
+    .replace(/\s+([,.!?…])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function botSay(segmentId, text) {
   const box = $("bubbles");
   clearTyping();
@@ -370,7 +384,7 @@ function botSay(segmentId, text) {
   }
   botSegments.push({ id: Number(segmentId) || botSegments.length, text });
   botSegments.sort((a, b) => a.id - b.id);
-  botBubble.textContent = botSegments.map((x) => x.text).join(" ");
+  botBubble.textContent = cleanSpeech(botSegments.map((x) => x.text).join(" "));
   box.scrollTop = box.scrollHeight;
 }
 
@@ -453,10 +467,7 @@ async function call() {
       thinkingTimer = setTimeout(() => setState("Слухаю", "говоріть звичайним голосом"), 8000);
     },
     onUserText: (text) => { clearTimeout(typingTimer); bubble("me", text); },
-    onBotText: (text) => {
-      const clean = String(text || "").replace(/<break[^>]*>/gi, " ").replace(/\s+/g, " ").trim();
-      if (/[\p{L}\p{N}]/u.test(clean)) botSay(botSegments.length, clean);
-    },
+    onBotText: (text) => { if (text) botSay(botSegments.length, String(text)); },
     onBotStart: () => {
       botSpeaking = true;
       clearTimeout(thinkingTimer);

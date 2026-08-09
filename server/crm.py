@@ -196,9 +196,12 @@ def _parse_nights(start: str, end: str) -> tuple[str, str, int, str | None]:
     except (ValueError, TypeError):
         return "", "", 0, "неправильний формат дат, очікується РРРР-ММ-ДД"
     if (co - ci).days <= 0:
-        return "", "", 0, "дата виїзду має бути пізніше за дату заїзду"
+        return "", "", 0, "дата виїзду має бути пізніше за дату заїзду — перепитай дати"
     if ci < date.today():
-        return "", "", 0, "ця дата вже минула — уточни, на які дати потрібно"
+        return "", "", 0, (
+            f"ця дата вже минула (сьогодні {date.today().isoformat()}). "
+            "Скажи про це вголос і спитай, на яке число потрібно"
+        )
     if (ci - date.today()).days > BOOK.horizon_days:
         return "", "", 0, f"так далеко наперед не бронюємо (максимум {BOOK.horizon_days} днів)"
     return ci.isoformat(), co.isoformat(), (co - ci).days, None
@@ -214,7 +217,10 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
     finish = begin + timedelta(minutes=duration_min)
 
     if begin < datetime.now():
-        return "", "", "цей час уже минув — запропонуй найближчий вільний"
+        return "", "", (
+            f"цей час уже минув (зараз {datetime.now().strftime('%Y-%m-%d %H:%M')}). "
+            "Скажи про це вголос і спитай, на коли потрібно"
+        )
     if (begin.date() - date.today()).days > BOOK.horizon_days:
         return "", "", f"так далеко наперед не записуємо (максимум {BOOK.horizon_days} днів)"
 
