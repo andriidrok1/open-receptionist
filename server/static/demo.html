@@ -162,6 +162,11 @@
     background: var(--surface); border: 1px solid var(--hair); color: var(--ink-2); font-size: 14px;
   }
   .note.bad { border-color: var(--crit); color: var(--crit); }
+  .btn-note {
+    display: block; margin-top: 10px; border: 1px solid var(--primary);
+    background: var(--primary); color: #fff; border-radius: 10px;
+    padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer;
+  }
 
   @media (min-width: 901px) { .call-panel { position: sticky; top: 20px; } }
   @media (max-width: 900px) {
@@ -310,11 +315,16 @@ function setState(main, sub = "") {
   $("state").innerHTML = `${esc(main)}${sub ? `<small>${esc(sub)}</small>` : ""}`;
 }
 
-function note(text, bad = false) {
+function note(text, bad = false, actionLabel = "") {
   const n = $("note");
   n.hidden = !text;
   n.textContent = text || "";
   n.classList.toggle("bad", !!bad);
+  if (actionLabel) {
+    const b = el(`<button class="btn-note">${esc(actionLabel)}</button>`);
+    b.onclick = () => playBotAudio();
+    n.appendChild(b);
+  }
 }
 
 /* ------------------------------ розмова ------------------------------ */
@@ -444,6 +454,24 @@ function onRtvi(raw) {
   }
 }
 
+/* ------------------------------ звук бота ------------------------------ */
+
+/** Атрибута autoplay мало: браузер блокує звук, якщо вважає, що жесту не було,
+ *  і тоді сторінка показує текст відповіді, а в трубці тиша. Тому play()
+ *  викликаємо явно, а якщо його все одно відхилили — даємо кнопку, натиск на
+ *  яку і є тим жестом. */
+function playBotAudio(stream) {
+  const a = $("botAudio");
+  if (stream) a.srcObject = stream;
+  a.muted = false;
+  a.volume = 1;
+  const p = a.play();
+  if (p && p.catch) {
+    p.then(() => note(""))
+     .catch(() => note("Браузер заблокував звук. Натисніть «Увімкнути звук».", true, "Увімкнути звук"));
+  }
+}
+
 /* ------------------------------ дзвінок ------------------------------ */
 
 function iceReady(pc) {
@@ -488,7 +516,7 @@ async function call() {
 
   pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
   micStream.getAudioTracks().forEach(t => pc.addTrack(t, micStream));
-  pc.ontrack = (ev) => { $("botAudio").srcObject = ev.streams[0]; };
+  pc.ontrack = (ev) => playBotAudio(ev.streams[0]);
   pc.onconnectionstatechange = () => {
     if (["failed", "closed", "disconnected"].includes(pc.connectionState)) hangUp();
   };
