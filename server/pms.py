@@ -43,6 +43,37 @@ def normalize_phone(raw: str | None) -> str | None:
     return digits or raw
 
 
+def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
+    """Перевірити український номер. Повертає (нормалізований, помилка).
+
+    Навіщо: модель, розпізнаючи телефон з мовлення, інколи додає або губить
+    цифру («нуль шістдесят сім сімсот сімдесят сім сорок п'ять шістдесят сім»
+    → 06777745667, одинадцять цифр). Мовчки прийняти такий номер = підтвердити
+    бронь, за якою готель не додзвониться. Краще повернути помилку, щоб
+    Оксана перепитала.
+
+    Приймаємо: 0XXXXXXXXX (10 цифр), 380XXXXXXXXX / +380XXXXXXXXX (12 цифр).
+    """
+    if not raw:
+        return None, "телефон не вказано"
+
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return None, "у номері немає жодної цифри — продиктуй цифрами, не словами"
+
+    if len(digits) == 12 and digits.startswith("380"):
+        digits = "0" + digits[3:]
+    elif len(digits) == 11 and digits.startswith("80"):
+        digits = "0" + digits[2:]
+
+    if len(digits) != 10 or not digits.startswith("0"):
+        return None, (
+            f"у номері {len(digits)} цифр замість десяти — "
+            "перепитай номер у гостя й повтори по цифрах"
+        )
+    return digits, None
+
+
 def normalize_room_type(raw: str) -> str | None:
     """Привести назву типу номера (укр./рос./англ.) до канонічного ключа."""
     if not raw:
@@ -175,9 +206,9 @@ def list_bookings() -> list[dict]:
 
 def take_message(guest_name: str, phone: str, topic: str) -> dict:
     """Записати запит на зворотний дзвінок (питання поза межами бронювання)."""
-    phone = normalize_phone(phone)
-    if not (phone and phone.strip()):
-        return {"success": False, "error": "не вказано телефон для зворотного дзвінка"}
+    phone, phone_error = validate_phone(phone)
+    if phone_error:
+        return {"success": False, "error": phone_error}
     if not (topic and topic.strip()):
         return {"success": False, "error": "не вказано суть питання"}
     with _connect() as conn:
@@ -304,7 +335,9 @@ def create_booking(
 
     Перед записом ще раз перевіряє наявність (щоб не переброньувати).
     """
-    phone = normalize_phone(phone)
+    phone, phone_error = validate_phone(phone)
+    if phone_error:
+        return {"success": False, "error": phone_error}
     avail = check_availability(check_in, check_out, room_type, guests)
     if avail.get("error"):
         return {"success": False, "error": avail["error"]}
