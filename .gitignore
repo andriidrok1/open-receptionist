@@ -228,3 +228,7 @@ server/*.db
 # voice_lab: згенеровані mp3 та мапа доданих у колекцію голосів
 server/voice_lab_out/
 server/voice_lab_state.json
+
+# Фронт демо: залежності SDK. Зібраний бандл (server/static/voice-client.js)
+# у репозиторії — щоб демо піднімалось без npm.
+client/node_modules/

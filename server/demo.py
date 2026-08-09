@@ -20,6 +20,7 @@ from pathlib import Path
 from business import load_business
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
@@ -83,6 +84,8 @@ def _card(key: str) -> dict:
 CARDS = [_card(k) for k in DEMO_BUSINESSES if (HERE / "businesses" / f"{k}.yaml").exists()]
 
 app = FastAPI(title="voice-receptionist · demo")
+# /static — зібраний бандл офіційного SDK pipecat (див. client/).
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)

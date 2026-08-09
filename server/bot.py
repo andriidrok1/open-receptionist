@@ -27,6 +27,8 @@ STT перемикається через STT_PROVIDER:
 import asyncio
 import os
 
+import aiohttp
+
 import agent_tools
 import crm
 from business import BUSINESS, build_system_prompt, greeting_hint
@@ -64,7 +66,10 @@ from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService, CommitStrategy
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.services.elevenlabs.tts import (
+    ElevenLabsHttpTTSService,
+    ElevenLabsTTSService,
+)
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.stt import OpenAIRealtimeSTTService
 from pipecat.services.openai.tts import OpenAITTSService
@@ -105,6 +110,7 @@ class ServerVADSpeechTimeoutStopStrategy(SpeechTimeoutUserTurnStopStrategy):
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     """Run the voice bot for this session."""
+    aiohttp_session = aiohttp.ClientSession()
     logger.info(f"Starting voice receptionist (uk) — {BUSINESS.key}: {BUSINESS.name}")
     crm.init_db()
 
@@ -170,22 +176,36 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # передбачуваною. style тримаємо на 0 — він додає затримки, а бюджет розмови
     # і так напружений. Без ELEVENLABS_API_KEY — відкат на OpenAI.
     if elevenlabs_key:
-        tts = ElevenLabsTTSService(
-            api_key=elevenlabs_key,
-            settings=ElevenLabsTTSService.Settings(
-                voice=os.getenv("ELEVENLABS_VOICE_ID", "bsourKGZEagmttzrIzmu"),  # Kateryna Pavlenko
-                model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
-                language=Language.UK,
-                speed=float(os.getenv("ELEVENLABS_SPEED", "0.95")),
-                stability=float(os.getenv("ELEVENLABS_STABILITY", "0.4")),
-                style=float(os.getenv("ELEVENLABS_STYLE", "1.0")),
-            ),
-            # Без цього break-теги поїдуть у модель як звичайний текст.
-            enable_ssml_parsing=True,
-            # Наголоси + санітайзер пауз. Фільтри застосовуються вже після
-            # склейки речень, тобто бачать цілу репліку, а не уривок стріму.
-            text_filters=[UkrainianSpeechFilter()],
+        voice_settings = dict(
+            voice=os.getenv("ELEVENLABS_VOICE_ID", "bsourKGZEagmttzrIzmu"),  # Kateryna Pavlenko
+            model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
+            language=Language.UK,
+            speed=float(os.getenv("ELEVENLABS_SPEED", "0.95")),
+            stability=float(os.getenv("ELEVENLABS_STABILITY", "0.4")),
+            style=float(os.getenv("ELEVENLABS_STYLE", "1.0")),
         )
+        # ws — потоковий мульти-стрім (нижча затримка), http — окремий запит на
+        # репліку. Перемикач потрібен, бо на ws-шляху репліка інколи обривається
+        # на середині: аудіо від ElevenLabs приходить повне (перевірено прямим
+        # запитом до API), але до браузера долітає не все, а третя репліка
+        # поспіль інколи не звучить узагалі.
+        if os.getenv("ELEVENLABS_TTS_TRANSPORT", "http") == "http":
+            tts = ElevenLabsHttpTTSService(
+                api_key=elevenlabs_key,
+                aiohttp_session=aiohttp_session,
+                settings=ElevenLabsHttpTTSService.Settings(**voice_settings),
+                text_filters=[UkrainianSpeechFilter()],
+            )
+        else:
+            tts = ElevenLabsTTSService(
+                api_key=elevenlabs_key,
+                settings=ElevenLabsTTSService.Settings(**voice_settings),
+                # Без цього break-теги поїдуть у модель як звичайний текст.
+                enable_ssml_parsing=True,
+                # Санітайзер пауз. Фільтри застосовуються вже після склейки
+                # речень, тобто бачать цілу репліку, а не уривок стріму.
+                text_filters=[UkrainianSpeechFilter()],
+            )
     else:
         tts = OpenAITTSService(
             api_key=api_key,
@@ -302,7 +322,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     runner = WorkerRunner(handle_sigint=False)
 
     await runner.add_workers(worker)
-    await runner.run()
+    try:
+        await runner.run()
+    finally:
+        await aiohttp_session.close()
 
 
 async def bot(runner_args: RunnerArguments):

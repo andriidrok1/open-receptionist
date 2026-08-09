@@ -227,6 +227,7 @@
 
 <audio id="botAudio" autoplay playsinline></audio>
 
+<script src="/static/voice-client.js"></script>
 <script type="module">
 const $ = (id) => document.getElementById(id);
 const el = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
@@ -245,7 +246,7 @@ function fmtWhen(startsAt, endsAt) {
 }
 
 let CARDS = [], current = null;
-let pc = null, dc = null, micStream = null, pingTimer = null, tickTimer = null;
+let tickTimer = null;
 let callStartedUtc = null, seconds = 0, liveBubble = null, botBubble = null;
 let seenSegments = new Set(), seenEvents = 0, pollTimer = null;
 let botSpeaking = false, thinkingTimer = null, typingTimer = null, botSegments = [];
@@ -266,7 +267,7 @@ function renderTabs() {
   const box = $("tabs"); box.innerHTML = "";
   for (const c of CARDS) {
     const b = el(`<button class="tab" role="tab" aria-selected="${c === current}">${esc(c.tab)}</button>`);
-    b.onclick = () => { if (pc) hangUp(); select(c); };
+    b.onclick = () => { if (client) hangUp(); select(c); };
     box.appendChild(b);
   }
 }
@@ -381,107 +382,27 @@ function action(name, ref) {
       esc(label)}${/^[А-ЯA-Z]{2}-\d+$/.test(ref || "") ? ` <b style="font-weight:600">${esc(ref)}</b>` : ""}</div>`));
 }
 
-/** ?debug=1 — вивалювати типи подій у консоль. Коли демо мовчить на чужій
- *  машині, це перше, що треба побачити: доходять події взагалі чи ні. */
-const DEBUG = new URLSearchParams(location.search).has("debug");
-
-function onRtvi(raw) {
-  let m; try { m = JSON.parse(raw); } catch { return; }
-  if (DEBUG) console.log("RTVI", m.type, JSON.stringify(m.data || {}).slice(0, 120));
-  if (m.label !== "rtvi-ai") return;
-  const d = m.data || {};
-  switch (m.type) {
-    case "user-transcription":
-      if (d.text && d.final) { clearTimeout(typingTimer); bubble("me", d.text); }
-      break;
-    // Репліки бота беремо з bot-output, а не з bot-transcription: друге
-    // приходить не для кожного речення, і частина відповіді просто зникала.
-    // Одне речення шлеться кілька разів (оновлюється статус «сказано») —
-    // тому дедуп по segment_id.
-    case "bot-output": {
-      if (!d.text || d.will_be_spoken === false || seenSegments.has(d.segment_id)) break;
-      seenSegments.add(d.segment_id);
-      // bot-output — це сирий текст LLM, разом із break-тегами для синтезатора.
-      // На екрані вони не потрібні, а огризки з самої пунктуації пропускаємо.
-      const clean = d.text.replace(/<break[^>]*>/gi, " ").replace(/\s+/g, " ").trim();
-      if (/[\p{L}\p{N}]/u.test(clean)) botSay(d.segment_id, clean);
-      break;
-    }
-
-    // Обірвана репліка не має склеюватись із наступною. Межу беремо по
-    // перебиванню, а не по bot-llm-started: та подія приходить і всередині
-    // одного ходу (виклик інструмента), і розривала відповідь навпіл.
-    case "bot-interrupted":
-      botBubble = null; botSegments = [];
-      break;
-    case "bot-started-speaking":
-      botSpeaking = true;
-      clearTimeout(thinkingTimer);
-      setState("Говорить " + current.agent, "перебивайте, коли захочете");
-      break;
-    case "user-transcription-final-marker":
-      break;
-    case "user-started-speaking":
-      botBubble = null; botSegments = [];  // далі буде нова репліка
-      clearTimeout(thinkingTimer);
-      typingBubble();
-      // Хибне спрацювання VAD (кашель, стук) фінальним текстом не закінчиться —
-      // знімаємо крапки самі, щоб вони не висіли до кінця дзвінка.
-      clearTimeout(typingTimer);
-      typingTimer = setTimeout(clearTyping, 6000);
-      setState("Слухаю", "говоріть звичайним голосом");
-      break;
-    // Між «людина замовкла» і першим словом відповіді проходить секунда-дві.
-    // Без явного стану ця пауза читається як «воно мене не почуло».
-    case "user-stopped-speaking":
-      // Поки бот говорить, «Обробляю…» — брехня: VAD ловить і власне відлуння,
-      // і шум у кімнаті. А якщо відповідь так і не прийшла за 8 секунд, надпис
-      // однаково треба зняти, інакше він виглядає як зависання.
-      if (botSpeaking) break;
-      setState("Обробляю…", "секунду");
-      clearTimeout(thinkingTimer);
-      thinkingTimer = setTimeout(
-        () => setState("Слухаю", "говоріть звичайним голосом"), 8000);
-      break;
-    case "bot-stopped-speaking":
-      // Бульбашку тут НЕ закриваємо: подія прилітає й між реченнями одного
-      // ходу, і відповідь розсипалась би на шматки. Межа репліки — коли
-      // заговорила людина або коли бота перебили.
-      botSpeaking = false;
-      clearTimeout(thinkingTimer);
-      setState("Слухаю", "говоріть звичайним голосом");
-      break;
-  }
-}
-
-/* ------------------------------ звук бота ------------------------------ */
-
-/** Атрибута autoplay мало: браузер блокує звук, якщо вважає, що жесту не було,
- *  і тоді сторінка показує текст відповіді, а в трубці тиша. Тому play()
- *  викликаємо явно, а якщо його все одно відхилили — даємо кнопку, натиск на
- *  яку і є тим жестом. */
-function playBotAudio(stream) {
-  const a = $("botAudio");
-  if (stream) a.srcObject = stream;
-  a.muted = false;
-  a.volume = 1;
-  const p = a.play();
-  if (p && p.catch) {
-    p.then(() => note(""))
-     .catch(() => note("Браузер заблокував звук. Натисніть «Увімкнути звук».", true, "Увімкнути звук"));
-  }
-}
-
 /* ------------------------------ дзвінок ------------------------------ */
 
-function iceReady(pc) {
-  if (pc.iceGatheringState === "complete") return Promise.resolve();
-  return new Promise(resolve => {
-    const done = () => { pc.removeEventListener("icegatheringstatechange", check); resolve(); };
-    const check = () => { if (pc.iceGatheringState === "complete") done(); };
-    pc.addEventListener("icegatheringstatechange", check);
-    setTimeout(done, 3000);  // не чекаємо вічно: локальних кандидатів вистачає
-  });
+/** Підключення веде офіційний SDK pipecat (bundle у /static/voice-client.js).
+ *  Ручна реалізація протоколу коштувала чотирьох багів поспіль — від невірного
+ *  типу повідомлення з текстом бота до обриву звуку на першій секунді. */
+let client = null, audioCtx = null, audioSrc = null;
+
+function attachBotAudio(track) {
+  const a = $("botAudio");
+  const stream = new MediaStream([track]);
+  a.srcObject = stream;
+  a.muted = false;
+  a.play().catch(() =>
+    note("Браузер заблокував звук. Натисніть «Увімкнути звук».", true, "Увімкнути звук"));
+}
+
+function playBotAudio() {                 // кнопка «Увімкнути звук»
+  const a = $("botAudio");
+  a.muted = false;
+  a.play().then(() => note("")).catch(() => {});
+  if (audioCtx) audioCtx.resume();
 }
 
 async function call() {
@@ -503,73 +424,57 @@ async function call() {
   // інакше «що з'явилось після дзвінка» промахнеться на зсув часової зони.
   callStartedUtc = new Date().toISOString().slice(0, 19).replace("T", " ");
 
+  const base = `${location.protocol}//${location.hostname}:${c.port}`;
+  client = window.createVoiceClient(base, {
+    onReady: () => {
+      $("dial").disabled = false;
+      $("dial").classList.remove("idle");
+      $("dial").classList.add("live");
+      $("dialIcon").innerHTML = ICON_HANGUP;
+      $("dial").setAttribute("aria-label", "Покласти трубку");
+      setState("Говоріть", "натисніть ще раз, щоб покласти трубку");
+      seenEvents = 0;
+      pollTimer = setInterval(pollEvents, 2000);
+      startTimer();
+    },
+    onBotAudio: attachBotAudio,
+    onUserStart: () => {
+      botBubble = null; botSegments = [];
+      clearTimeout(thinkingTimer);
+      typingBubble();
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(clearTyping, 6000);
+      setState("Слухаю", "говоріть звичайним голосом");
+    },
+    onUserStop: () => {
+      if (botSpeaking) return;
+      setState("Обробляю…", "секунду");
+      clearTimeout(thinkingTimer);
+      thinkingTimer = setTimeout(() => setState("Слухаю", "говоріть звичайним голосом"), 8000);
+    },
+    onUserText: (text) => { clearTimeout(typingTimer); bubble("me", text); },
+    onBotText: (text) => {
+      const clean = String(text || "").replace(/<break[^>]*>/gi, " ").replace(/\s+/g, " ").trim();
+      if (/[\p{L}\p{N}]/u.test(clean)) botSay(botSegments.length, clean);
+    },
+    onBotStart: () => {
+      botSpeaking = true;
+      clearTimeout(thinkingTimer);
+      setState("Говорить " + c.agent, "перебивайте, коли захочете");
+    },
+    onBotStop: () => { botSpeaking = false; clearTimeout(thinkingTimer);
+                       setState("Слухаю", "говоріть звичайним голосом"); },
+    onEnd: () => hangUp(),
+    onError: () => note(`Бот цієї сфери зараз не відповідає (порт ${c.port}).`, true),
+  });
+
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-  } catch {
-    setState("Подзвонити");
-    $("dial").disabled = false;
-    note("Не вдалося отримати доступ до мікрофона. Дозвольте його в налаштуваннях браузера.", true);
-    return;
-  }
-
-  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-  micStream.getAudioTracks().forEach(t => pc.addTrack(t, micStream));
-  pc.ontrack = (ev) => playBotAudio(ev.streams[0]);
-  pc.onconnectionstatechange = () => {
-    if (["failed", "closed", "disconnected"].includes(pc.connectionState)) hangUp();
-  };
-
-  dc = pc.createDataChannel("rtvi");
-  dc.onmessage = (ev) => onRtvi(ev.data);
-  dc.onopen = () => {
-    // Без client-ready бот не привітається — він чекає саме на це повідомлення.
-    dc.send(JSON.stringify({
-      label: "rtvi-ai", type: "client-ready", id: "ready",
-      data: { version: "2.0.0", about: { library: "voice-receptionist-demo" } },
-    }));
-    // Сервер не бачить розриву сам — тримаємо його в курсі пінгами.
-    pingTimer = setInterval(() => { try { dc.send("ping"); } catch {} }, 5000);
-  };
-
-  try {
-    await pc.setLocalDescription(await pc.createOffer());
-    await iceReady(pc);
-    const base = `${location.protocol}//${location.hostname}:${c.port}`;
-    const res = await fetch(`${base}/api/offer`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
-    });
-    if (!res.ok) throw new Error(res.status);
-    await pc.setRemoteDescription(await res.json());
+    await client.connect();
   } catch (e) {
+    client = null;
     hangUp();
-    note(`Бот цієї сфери зараз не відповідає (порт ${c.port}). Перевірте, що запущено run_demo.py.`, true);
-    return;
+    note(`Не вдалося з'єднатися з ботом (порт ${c.port}). Перевірте, що запущено run_demo.py.`, true);
   }
-
-  $("dial").disabled = false;
-  $("dial").classList.remove("idle");
-  $("dial").classList.add("live");
-  $("dialIcon").innerHTML = ICON_HANGUP;
-  $("dial").setAttribute("aria-label", "Покласти трубку");
-  setState("Говоріть", "натисніть ще раз, щоб покласти трубку");
-  seenEvents = 0;
-  pollTimer = setInterval(pollEvents, 2000);
-  startTimer();
-}
-
-/** Стрічка дій під час розмови. RTVI про виклики інструментів не повідомляє,
- *  тому дивимось у журнал, який пише сам бот. */
-async function pollEvents() {
-  try {
-    const r = await fetch(
-      `/api/activity/${current.key}?since=${encodeURIComponent(callStartedUtc)}`);
-    const { events = [] } = await r.json();
-    for (const e of events.slice(seenEvents)) action(e.kind, e.detail);
-    seenEvents = events.length;
-  } catch {}
 }
 
 function startTimer() {
@@ -592,13 +497,10 @@ function hangUp() {
   clearTimeout(thinkingTimer); thinkingTimer = null;
   clearTimeout(typingTimer); typingTimer = null;
   clearInterval(pollTimer); pollTimer = null;
-  clearInterval(pingTimer); pingTimer = null;
   clearInterval(tickTimer); tickTimer = null;
   $("timer").textContent = ""; $("timer").classList.remove("warn");
-  try { dc && dc.close(); } catch {}
-  try { pc && pc.close(); } catch {}
-  micStream && micStream.getTracks().forEach(t => t.stop());
-  pc = dc = micStream = null;
+  if (client) { const c = client; client = null; c.disconnect().catch(() => {}); }
+  clearTyping();
   $("dial").disabled = false;
   $("dial").classList.remove("live");
   $("dial").classList.add("idle");
@@ -651,7 +553,7 @@ async function showResult() {
 
 /* ------------------------------ старт ------------------------------ */
 
-$("dial").onclick = () => (pc ? hangUp() : call());
+$("dial").onclick = () => (client ? hangUp() : call());
 
 (async function init() {
   try {
