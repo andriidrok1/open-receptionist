@@ -132,6 +132,12 @@
   .b.bot { background: var(--primary-soft); color: var(--ink); border-bottom-left-radius: 5px; align-self: flex-start; }
   .b.me { background: var(--bg); border: 1px solid var(--hair); border-bottom-right-radius: 5px; align-self: flex-end; }
   .b.live { opacity: .6; }
+  .dots { display: inline-flex; gap: 4px; align-items: center; height: 20px; }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted);
+            animation: blink 1.2s infinite; }
+  .dots i:nth-child(2) { animation-delay: .2s; }
+  .dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 60%, 100% { opacity: .25 } 30% { opacity: 1 } }
   .acts { margin-top: 16px; display: flex; flex-direction: column; gap: 7px; }
   .act { display: flex; align-items: center; gap: 9px; color: var(--ink-2); font-size: 14px; }
   .act i { width: 17px; height: 17px; border-radius: 50%; background: var(--good); flex: none; display: grid; place-items: center; }
@@ -237,7 +243,7 @@ let CARDS = [], current = null;
 let pc = null, dc = null, micStream = null, pingTimer = null, tickTimer = null;
 let callStartedUtc = null, seconds = 0, liveBubble = null, botBubble = null;
 let seenSegments = new Set(), seenEvents = 0, pollTimer = null;
-let botSpeaking = false, thinkingTimer = null;
+let botSpeaking = false, thinkingTimer = null, typingTimer = null, botSegments = [];
 
 const ICON_CALL = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/>';
 const ICON_HANGUP = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/><path d="M3 3l18 18"/>';
@@ -313,23 +319,47 @@ function note(text, bad = false) {
 
 /* ------------------------------ розмова ------------------------------ */
 
-function bubble(who, text, live = false) {
+/** Крапки «вас чути» замість тексту, поки людина говорить.
+ *  Проміжні здогадки Scribe показувати НЕ можна: на тиші й шумі він видає
+ *  короткі слова («Да.»), і на екрані з'являється репліка, якої не було —
+ *  на демо це виглядає так, ніби бот вигадує за співрозмовника. */
+function typingBubble() {
   const box = $("bubbles");
-  if (live) {
-    if (!liveBubble) { liveBubble = el(`<div class="b ${who} live"></div>`); box.appendChild(liveBubble); }
-    liveBubble.textContent = text;
-  } else {
-    if (liveBubble) { liveBubble.remove(); liveBubble = null; }
-    // Бот віддає транскрипт по реченню за раз. Три бульбашки замість однієї
-    // репліки читаються як заїкання, тому доклеюємо, поки говорить він.
-    if (who === "bot" && botBubble) {
-      botBubble.textContent = (botBubble.textContent + " " + text).replace(/\s+/g, " ").trim();
-    } else {
-      const b = el(`<div class="b ${who}">${esc(text)}</div>`);
-      box.appendChild(b);
-      botBubble = who === "bot" ? b : null;
-    }
+  if (!liveBubble) {
+    liveBubble = el(`<div class="b me live"><span class="dots"><i></i><i></i><i></i></span></div>`);
+    box.appendChild(liveBubble);
+    box.scrollTop = box.scrollHeight;
   }
+}
+
+function clearTyping() {
+  if (liveBubble) { liveBubble.remove(); liveBubble = null; }
+}
+
+function bubble(who, text) {
+  const box = $("bubbles");
+  clearTyping();
+  box.appendChild(el(`<div class="b ${who}">${esc(text)}</div>`));
+  box.scrollTop = box.scrollHeight;
+}
+
+/** Одна репліка бота — одна бульбашка, зібрана з речень.
+ *
+ *  Речення приходять окремими подіями і НЕ обов'язково по порядку (кожен
+ *  сегмент шлеться двічі: коли поставлений у чергу і коли озвучений). Тому
+ *  тримаємо їх у списку і щоразу перезбираємо текст за segment_id — інакше
+ *  ціна опиняється перед фразою, до якої вона належить. */
+function botSay(segmentId, text) {
+  const box = $("bubbles");
+  clearTyping();
+  if (!botBubble) {
+    botBubble = el(`<div class="b bot"></div>`);
+    box.appendChild(botBubble);
+    botSegments = [];
+  }
+  botSegments.push({ id: Number(segmentId) || botSegments.length, text });
+  botSegments.sort((a, b) => a.id - b.id);
+  botBubble.textContent = botSegments.map((x) => x.text).join(" ");
   box.scrollTop = box.scrollHeight;
 }
 
@@ -352,7 +382,7 @@ function onRtvi(raw) {
   const d = m.data || {};
   switch (m.type) {
     case "user-transcription":
-      if (d.text) bubble("me", d.text, !d.final);
+      if (d.text && d.final) { clearTimeout(typingTimer); bubble("me", d.text); }
       break;
     // Репліки бота беремо з bot-output, а не з bot-transcription: друге
     // приходить не для кожного речення, і частина відповіді просто зникала.
@@ -364,15 +394,15 @@ function onRtvi(raw) {
       // bot-output — це сирий текст LLM, разом із break-тегами для синтезатора.
       // На екрані вони не потрібні, а огризки з самої пунктуації пропускаємо.
       const clean = d.text.replace(/<break[^>]*>/gi, " ").replace(/\s+/g, " ").trim();
-      if (/[\p{L}\p{N}]/u.test(clean)) bubble("bot", clean);
+      if (/[\p{L}\p{N}]/u.test(clean)) botSay(d.segment_id, clean);
       break;
     }
 
-    // Нова відповідь LLM = нова репліка. Без цієї межі обірване привітання
-    // склеювалось із наступною відповіддю в одну довгу бульбашку.
-    case "bot-llm-started":
+    // Обірвана репліка не має склеюватись із наступною. Межу беремо по
+    // перебиванню, а не по bot-llm-started: та подія приходить і всередині
+    // одного ходу (виклик інструмента), і розривала відповідь навпіл.
     case "bot-interrupted":
-      botBubble = null;
+      botBubble = null; botSegments = [];
       break;
     case "bot-started-speaking":
       botSpeaking = true;
@@ -382,8 +412,13 @@ function onRtvi(raw) {
     case "user-transcription-final-marker":
       break;
     case "user-started-speaking":
-      botBubble = null;  // наступне речення бота піде вже новою реплікою
+      botBubble = null; botSegments = [];  // далі буде нова репліка
       clearTimeout(thinkingTimer);
+      typingBubble();
+      // Хибне спрацювання VAD (кашель, стук) фінальним текстом не закінчиться —
+      // знімаємо крапки самі, щоб вони не висіли до кінця дзвінка.
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(clearTyping, 6000);
       setState("Слухаю", "говоріть звичайним голосом");
       break;
     // Між «людина замовкла» і першим словом відповіді проходить секунда-дві.
@@ -399,8 +434,10 @@ function onRtvi(raw) {
         () => setState("Слухаю", "говоріть звичайним голосом"), 8000);
       break;
     case "bot-stopped-speaking":
+      // Бульбашку тут НЕ закриваємо: подія прилітає й між реченнями одного
+      // ходу, і відповідь розсипалась би на шматки. Межа репліки — коли
+      // заговорила людина або коли бота перебили.
       botSpeaking = false;
-      botBubble = null;
       clearTimeout(thinkingTimer);
       setState("Слухаю", "говоріть звичайним голосом");
       break;
@@ -429,7 +466,8 @@ async function call() {
   $("talk").classList.add("on");
   $("result").classList.remove("on");
   $("bubbles").innerHTML = ""; $("acts").innerHTML = "";
-  liveBubble = botBubble = null; seenSegments = new Set(); botSpeaking = false;
+  liveBubble = botBubble = null; seenSegments = new Set();
+  botSegments = []; botSpeaking = false;
   setState("З'єднуємось…");
   $("dial").disabled = true;
 
@@ -524,6 +562,7 @@ function startTimer() {
 
 function hangUp() {
   clearTimeout(thinkingTimer); thinkingTimer = null;
+  clearTimeout(typingTimer); typingTimer = null;
   clearInterval(pollTimer); pollTimer = null;
   clearInterval(pingTimer); pingTimer = null;
   clearInterval(tickTimer); tickTimer = null;

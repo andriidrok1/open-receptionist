@@ -131,6 +131,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 # — беруться з конфігу закладу, бо в кожній галузі вони свої.
                 keyterms=BUSINESS.stt_keyterms(),
             ),
+            # Scribe вміє filter_background_audio (видно в session_started), але
+            # pipecat 1.5 збирає URL за білим списком і цей параметр не передає.
+            # Тому фантоми на тиші глушаться на стороні клієнта: показуємо лише
+            # фінальний транскрипт, проміжні здогадки — ніколи.
         )
         # Локальний VAD: він і сегментує мовлення для STT, і дає межі ходу.
         # stop_secs=0.8 — пауза, після якої вважаємо, що гість договорив.
