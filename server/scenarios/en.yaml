@@ -113,3 +113,88 @@ distinctive: ["Whitfield", "Judah", "6285550147"]
 # of success — without this list the agent doing exactly the right thing was the
 # one case the check punished.
 negations: [" not ", "n't", "nothing", "unable", "sorry", "couldn"]
+
+# Data for the scripted eval.py scenarios.
+eval:
+  confirm: "Yes, that's right."
+  test_marker: Testerson
+  caller_name: Chris Testerson
+  busy_stub: Busy Testerson
+  phone_digits: '4155550132'
+  name_turn: My name is Chris Testerson, and my number is four one five, five five five, oh one three
+    two.
+  ordinals:
+  - ''
+  - 1st
+  - 2nd
+  - 3rd
+  - 4th
+  - 5th
+  - 6th
+  - 7th
+  - 8th
+  - 9th
+  - 10th
+  - 11th
+  - 12th
+  - 13th
+  - 14th
+  - 15th
+  - 16th
+  - 17th
+  - 18th
+  - 19th
+  - 20th
+  - 21st
+  - 22nd
+  - 23rd
+  - 24th
+  - 25th
+  - 26th
+  - 27th
+  - 28th
+  - 29th
+  - 30th
+  - 31st
+  months:
+  - ''
+  - January
+  - February
+  - March
+  - April
+  - May
+  - June
+  - July
+  - August
+  - September
+  - October
+  - November
+  - December
+  hours:
+    '9': nine
+    '10': ten
+    '11': eleven
+    '12': noon
+    '13': one
+    '14': two
+    '15': three
+    '16': four
+    '17': five
+    '18': six
+    '19': seven
+    '20': eight
+    '21': nine
+    '22': ten
+  say_day: '{month} the {ordinal}'
+  say_time: at {hour}{suffix}
+  turns:
+    c1: Hi! I'd like to book a {service} on {day}, {time}.
+    c2: I want {busy_service} on {day}, {time}.
+    c3: Book me a {service} on {day}, {time}.
+  titles:
+    c1: 'Happy path: {service} {day} {time}'
+    c2: 'Taken hour: the agent offers free slots instead of inventing one'
+    c3_closed: 'Closed day: nothing is booked'
+    c3_late: 'After closing time: nothing is booked'
+    c3_far: 'Too far ahead: nothing is booked'
+    c4: Off-topic ({offtopic}) → take_message, nothing invented

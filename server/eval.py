@@ -76,37 +76,40 @@ _digits = lambda s: re.sub(r"\D", "", s or "")  # noqa: E731
 
 
 # --------------------- dates and times in words ---------------------
+#
+# The spoken forms and the scripted lines live in scenarios/<lang>.yaml, next to
+# the simulator's personas. Keeping them in Python meant eval could only ever
+# speak one language, so the English business had a free-running simulator and
+# zero deterministic checks.
 
-_ORD_GEN = [
-    "", "першого", "другого", "третього", "четвертого", "п'ятого", "шостого",
-    "сьомого", "восьмого", "дев'ятого", "десятого", "одинадцятого", "дванадцятого",
-    "тринадцятого", "чотирнадцятого", "п'ятнадцятого", "шістнадцятого",
-    "сімнадцятого", "вісімнадцятого", "дев'ятнадцятого", "двадцятого",
-    "двадцять першого", "двадцять другого", "двадцять третього", "двадцять четвертого",
-    "двадцять п'ятого", "двадцять шостого", "двадцять сьомого", "двадцять восьмого",
-    "двадцять дев'ятого", "тридцятого", "тридцять першого",
-]
-_MONTH_GEN = [
-    "", "січня", "лютого", "березня", "квітня", "травня", "червня",
-    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
-]
-_HOUR_LOC = {
-    9: "дев'ятій", 10: "десятій", 11: "одинадцятій", 12: "дванадцятій",
-    13: "тринадцятій", 14: "чотирнадцятій", 15: "п'ятнадцятій",
-    16: "шістнадцятій", 17: "сімнадцятій", 18: "вісімнадцятій",
-    19: "дев'ятнадцятій", 20: "двадцятій", 21: "двадцять першій", 22: "двадцять другій",
-}
-_WEEKDAY_ACC = ["понеділок", "вівторок", "середу", "четвер", "п'ятницю", "суботу", "неділю"]
+import yaml  # noqa: E402
+
+SCENARIOS_DIR = Path(__file__).parent / "scenarios"
+_path = SCENARIOS_DIR / f"{BUSINESS.language}.yaml"
+if not _path.exists():
+    sys.exit(f"no eval scenarios for language {BUSINESS.language!r} ({_path})")
+EV = yaml.safe_load(_path.read_text(encoding="utf-8"))["eval"]
+
+TEST_MARKER = EV["test_marker"]
+BUSY_STUB = EV["busy_stub"]
 
 
 def say_day(d: date) -> str:
-    """"the fourteenth of September" — a spoken date."""
-    return f"{_ORD_GEN[d.day]} {_MONTH_GEN[d.month]}"
+    """A date the way a caller says it out loud."""
+    return EV["say_day"].format(ordinal=EV["ordinals"][d.day], month=EV["months"][d.month])
 
 
 def say_time(hour: int) -> str:
-    """"at ten" — a spoken time."""
-    return f"о {_HOUR_LOC[hour]}"
+    """An hour the way a caller says it out loud.
+
+    For a 12-hour language this deliberately produces "at two" rather than
+    14:00 — the point of the scenario is to find out whether the model writes
+    14:00 or 02:00 into the tool.
+    """
+    suffix = ""
+    if "{suffix}" in EV["say_time"]:
+        suffix = "" if hour == 12 else (" in the morning" if hour < 12 else " in the afternoon")
+    return EV["say_time"].format(hour=EV["hours"][str(hour)], suffix=suffix)
 
 
 def next_weekday(weekday: int, min_days: int = 1) -> date:
@@ -117,23 +120,27 @@ def next_weekday(weekday: int, min_days: int = 1) -> date:
     return d
 
 
+def _s_name_turn() -> str:
+    return EV["name_turn"]
+
+
 # ------------------------------ the run ------------------------------
 
 
 def _cleanup() -> None:
     conn = sqlite3.connect(crm.DB_PATH)
-    conn.execute("DELETE FROM bookings WHERE customer_name LIKE '%Тестов%'")
-    conn.execute("DELETE FROM messages WHERE customer_name LIKE '%Тестов%'")
+    for table in ("bookings", "messages"):
+        conn.execute(f"DELETE FROM {table} WHERE customer_name LIKE ?", (f"%{TEST_MARKER}%",))
     conn.commit()
     conn.close()
 
 
 def _test_bookings() -> list[dict]:
-    return [b for b in crm.list_bookings() if "Тестов" in b["customer_name"]]
+    return [b for b in crm.list_bookings() if TEST_MARKER in b["customer_name"]]
 
 
 def _test_messages() -> list[dict]:
-    return [m for m in crm.list_messages() if "Тестов" in m["customer_name"]]
+    return [m for m in crm.list_messages() if TEST_MARKER in m["customer_name"]]
 
 
 def _booked(log) -> bool:
@@ -168,7 +175,7 @@ def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool
             if queue:
                 text = queue.pop(0)
             elif extra > 0:
-                text, extra = "Так, все правильно.", extra - 1
+                text, extra = EV["confirm"], extra - 1
             else:
                 break
             print(f"  🧑 КЛІЄНТ: {text}")
@@ -200,7 +207,7 @@ def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool
 
 H_IN = BUSINESS.today() + timedelta(days=35)
 H_OUT = H_IN + timedelta(days=3)
-H_PHONE = "0677774567"
+H_PHONE = EV["phone_digits"]
 # The store keeps E.164 now, so the expectation goes through the same
 # normalisation the agent's input does — otherwise the test asserts on a format
 # rather than on the number.
@@ -318,16 +325,12 @@ if (S_DAY - BUSINESS.today()).days > BUSINESS.booking.horizon_days:
     S_DAY = BUSINESS.today() + timedelta(days=1)
 S_HOUR = 10
 S_BUSY_HOUR = 12
-S_PHONE = "0677774567"
+S_PHONE = EV["phone_digits"]
 S_PHONE_STORED = crm.validate_phone(S_PHONE)[0]
 #: The service C1 books — set in _slot_scenarios for each industry.
 BOOK_FIRST = None
-BUSY_STUB = "Зайнято Тестовий"  # ім'я броні-заглушки, якою забиваємо годину в C2
 
 
-def _s_name_turn() -> str:
-    return ("Мене звати Тарас Тестовий, телефон нуль шістдесят сім, "
-            "сімсот сімдесят сім, сорок п'ять, шістдесят сім.")
 
 
 def checks_c1(log) -> list[tuple[bool, str]]:
@@ -390,20 +393,26 @@ def _closed_case(service_phrase: str) -> tuple[str, str]:
         d = BUSINESS.today() + timedelta(days=ahead)
         if BUSINESS.booking.hours_for(d) is None:
             return (
-                f"Запишіть мене на {service_phrase} {say_day(d)}, {say_time(11)}.",
-                "Вихідний день: запис не створюється",
+                EV["turns"]["c3"].format(
+                    service=service_phrase, day=say_day(d), time=say_time(11)
+                ),
+                EV["titles"]["c3_closed"],
             )
     if not BUSINESS.booking.is_round_clock(BUSINESS.today()):
         late = next_weekday(1, min_days=2)
         return (
-            f"Запишіть мене на {service_phrase} {say_day(late)}, {say_time(22)}.",
-            "Час після закриття: запис не створюється",
+            EV["turns"]["c3"].format(
+                service=service_phrase, day=say_day(late), time=say_time(22)
+            ),
+            EV["titles"]["c3_late"],
         )
     # A 24/7 business is never closed, so aim at a different boundary: horizon.
     far = BUSINESS.today() + timedelta(days=BUSINESS.booking.horizon_days + 25)
     return (
-        f"Запишіть мене на {service_phrase} {say_day(far)}, {say_time(11)}.",
-        "Занадто далеко наперед: запис не створюється",
+        EV["turns"]["c3"].format(
+            service=service_phrase, day=say_day(far), time=say_time(11)
+        ),
+        EV["titles"]["c3_far"],
     )
 
 
@@ -420,18 +429,23 @@ def _slot_scenarios(service_phrase: str, expect_key: str, busy_service: str,
     closed_turn, closed_title = _closed_case(service_phrase)
     return {
         "C1": {
-            "title": f"Happy path: {service_phrase} {say_day(S_DAY)} {say_time(S_HOUR)}",
+            "title": EV["titles"]["c1"].format(
+                service=service_phrase, day=say_day(S_DAY), time=say_time(S_HOUR)
+            ),
             "turns": [
-                f"Доброго дня! Хочу записатися на {service_phrase} "
-                f"{say_day(S_DAY)}, {say_time(S_HOUR)}.",
+                EV["turns"]["c1"].format(
+                    service=service_phrase, day=say_day(S_DAY), time=say_time(S_HOUR)
+                ),
                 _s_name_turn() + (f" {extra}" if extra else ""),
             ],
             "auto_confirm": True, "done": _booked, "checks": checks_c1,
         },
         "C2": {
-            "title": "Зайнятий час: агент пропонує вільні варіанти, не вигадує місце",
+            "title": EV["titles"]["c2"],
             "turns": [
-                f"Хочу {busy_service} {say_day(S_DAY)}, {say_time(S_BUSY_HOUR)}.",
+                EV["turns"]["c2"].format(
+                    busy_service=busy_service, day=say_day(S_DAY), time=say_time(S_BUSY_HOUR)
+                ),
             ],
             "auto_confirm": False, "done": None, "checks": checks_c2,
             "prepare": busy_key,
@@ -442,7 +456,7 @@ def _slot_scenarios(service_phrase: str, expect_key: str, busy_service: str,
             "auto_confirm": False, "done": None, "checks": checks_c3,
         },
         "C4": {
-            "title": f"Off-topic ({offtopic}) → take_message, без вигадок",
+            "title": EV["titles"]["c4"].format(offtopic=offtopic),
             "turns": [offtopic, _s_name_turn()],
             "auto_confirm": True, "done": _messaged, "checks": checks_c4,
         },
@@ -452,6 +466,11 @@ def _slot_scenarios(service_phrase: str, expect_key: str, busy_service: str,
 # The scenario set is built for the ACTIVE business: _slot_scenarios reaches into
 # BUSINESS (intake, hours, resources), so all five cannot be assembled at once.
 _SLOT_VERTICALS = {
+    "dental_us": dict(
+        service_phrase="cleaning", expect_key="cleaning",
+        busy_service="a filling", busy_key="filling",
+        offtopic="Does my insurance cover a root canal?",
+    ),
     "clinic": dict(
         service_phrase="професійну чистку", expect_key="cleaning", busy_service="видалити зуб", busy_key="extraction",
         offtopic="Скажіть, а ви приймаєте страховку і чи можна прийти з гострим болем зараз?",
@@ -495,7 +514,9 @@ def _prepare_busy(resource_key: str) -> None:
             resource=res.label,
             start=f"{S_DAY.isoformat()}T{S_BUSY_HOUR:02d}:00",
             customer_name=BUSY_STUB,
-            phone="0501112233",
+            # From the scenarios file: a Ukrainian number is invalid for a US
+            # business, and the stub would fail before the dialogue started.
+            phone=EV["phone_digits"],
             details={f.key: "для тесту" for f in BUSINESS.booking.intake},
         )
         assert out.get("success"), f"не вдалось забити годину: {out}"
