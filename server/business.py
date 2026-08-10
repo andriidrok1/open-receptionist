@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import load_dotenv
+from locale_pack import DEFAULT_LANGUAGE, load_locale
 
 # A business named explicitly on the command line has to win over .env,
 # otherwise `BUSINESS=clinic python bot.py` silently starts the hotel, because
@@ -54,8 +55,7 @@ MAX_KEYTERM_LEN = 20  # ElevenLabs Scribe's limit for one keyterm, in characters
 MAX_KEYTERMS = 50  # and for the whole list; exceeding it closes the socket (1008)
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-# TODO(locale): weekday names move to the language pack.
-WEEKDAYS_UK = ("понеділок", "вівторок", "середа", "четвер", "п'ятниця", "субота", "неділя")
+
 
 
 @dataclass(frozen=True)
@@ -164,17 +164,17 @@ class BookingConfig:
         wall of text."""
         if not self.hours:
             return ""
-        short = ("пн", "вт", "ср", "чт", "пт", "сб", "нд")
+        short = tuple(L.raw("calendar.weekdays_short"))
         groups: list[list] = []
         for i, key in enumerate(WEEKDAYS):
             raw = self.hours.get(key)
-            val = str(raw).replace("-", "–") if raw else "вихідний"
+            val = str(raw).replace("-", "–") if raw else L.text("calendar.closed")
             if groups and groups[-1][2] == val:
                 groups[-1][1] = i
             else:
                 groups.append([i, i, val])
         if len(groups) == 1 and groups[0][2].startswith("00:00"):
-            return "цілодобово, без вихідних"
+            return L.text("calendar.round_clock")
         return " · ".join(
             f"{short[a] if a == b else short[a] + '–' + short[b]} {val}" for a, b, val in groups
         )
@@ -184,7 +184,8 @@ class BookingConfig:
         parts = []
         for i, key in enumerate(WEEKDAYS):
             raw = self.hours.get(key)
-            parts.append(f"{WEEKDAYS_UK[i]} — {'вихідний' if not raw else str(raw).replace('-', '–')}")
+            closed = L.text("calendar.closed")
+            parts.append(f"{WEEKDAY_NAMES[i]} — {closed if not raw else str(raw).replace('-', '–')}")
         return "; ".join(parts)
 
 
@@ -208,6 +209,7 @@ class Business:
     demo_tab: str  # the short industry name on the demo tab
     demo_intro: str  # what the demo page says about this business
     demo_try: tuple[str, ...]  # the "try saying" suggestions
+    language: str  # which language pack the agent speaks (locales/<lang>.yaml)
     tz: str  # the timezone of the BUSINESS, not of the server
     booking: BookingConfig
 
@@ -360,6 +362,7 @@ def load_business(key: str | None = None) -> Business:
         demo_tab=((d.get("demo") or {}).get("tab") or d.get("key") or "").strip(),
         demo_intro=((d.get("demo") or {}).get("intro") or "").strip(),
         demo_try=tuple((d.get("demo") or {}).get("try") or ()),
+        language=d.get("language") or DEFAULT_LANGUAGE,
         tz=d.get("tz") or "Europe/Kyiv",
         booking=booking,
     )
@@ -368,6 +371,13 @@ def load_business(key: str | None = None) -> Business:
 #: The process's active business. One process serves one business, in the same
 #: way that one phone number belongs to one business.
 BUSINESS = load_business()
+
+#: The active language pack, named by the business config. Loaded after the
+#: business for that reason, and used from function bodies only.
+#: Caveat: the demo showcase loads several configs in one process, so if they
+#: ever declare different languages, the labels it renders follow this one.
+L = load_locale(BUSINESS.language)
+WEEKDAY_NAMES = tuple(L.raw("calendar.weekdays"))
 
 
 # ----------------------------- the system prompt -----------------------------
@@ -382,62 +392,18 @@ def _speech_rules(biz: Business) -> str:
     """How to talk. This is the strongest lever on sounding natural — stronger
     than any TTS setting, because the synthesiser voices punctuation, not
     meaning."""
-    cust = biz.customer_gen
-    return f"""ГОВОРИ, А НЕ ПИШИ. Твій текст читає синтезатор мовлення, і він озвучує саме те,
-як написано: кожна кома — це пауза. Тому фрази з письмової мови звучать
-роботизовано, скільки б їх не «оживляли» налаштуваннями голосу.
-
-Погано (так пишуть): «{biz.speech_bad}»
-Добре (так говорять): «{biz.speech_good}»
-
-Правила усного мовлення:
-- Не нанизуй усе через коми. Коротка фраза, крапка, наступна фраза.
-- Викидай канцелярит: «Отже», «Разом становить», «Чи можу я вам допомогти».
-  Кажи як людина: «Так», «Дивлюся», «Є», «Добре». Прохання формулюй проханням,
-  а не питанням про себе: «Підкажіть ваше ім'я та телефон», НЕ «Записала ім'я
-  та телефон?».
-- Тире й три крапки — твої інструменти інтонації: «Три ночі — п'ять тисяч
-  чотириста», «Зараз гляну...».
-- Числа, дати, час і ціни — тільки словами, ніколи цифрами. Як саме промовити
-  число, вирішуй сама, за живою мовою: «п'ять тисяч чотириста», «пів на третю»,
-  «чотирнадцятого липня». Головне — щоб це легко впізнавалось на слух, а не
-  було ланцюжком окремих цифр.
-- Не дроби думку на обрубки й не повторюй те саме двома способами.
-- В одній репліці МАКСИМУМ ОДНЕ питання. Ніколи не став два питання поспіль.
-- Без порожніх вступів («Дякую за інформацію») — одразу суть.
-- Ніяких емодзі, списків, дужок, зірочок — лише те, що можна вимовити.
-
-Якщо в репліці потрібна відчутна пауза (перед ціною, між блоками цифр
-телефону) — постав тег <break time="0.4s" />. МАКСИМУМ ДВА такі теги на
-репліку, інакше мовлення розганяється. Здебільшого досить крапки або тире.
-
-{biz.tone}
-
-Приклади в цій інструкції — зразок ІНТОНАЦІЇ, а не джерело фактів. Ніколи не
-бери з них імена, адреси, дати, години чи суми: усе це має прозвучати від
-співрозмовника або прийти з інструмента. Якщо чогось не назвали — спитай.
-
-Якщо інструмент повернув поле "error" — це НЕ означає «місць немає». Перекажи
-вголос саме те, що в помилці (минула дата, неробочий час, неповний номер), і
-спитай потрібне. Вигадувати вільні години заборонено: пропонувати можна ЛИШЕ
-те, що прийшло в полі "alternatives".
-
-Ти НЕ знаєш нічого, чого немає у блоці «ПРО ЗАКЛАД» і у відповідях
-інструментів. Не вигадуй факти, ціни й наявність — краще чесно сказати, що
-уточниш у колег і передзвониш, і записати {cust} через take_message."""
+    return L.text(
+        "prompt.speech_rules",
+        speech_bad=biz.speech_bad,
+        speech_good=biz.speech_good,
+        tone=biz.tone,
+        customer_gen=biz.customer_gen,
+    )
 
 
 def _phone_rules(biz: Business) -> str:
     """How to read a phone number out loud — the same for every industry."""
-    return f"""Телефон ОБОВ'ЯЗКОВО повтори вголос, але промовляй його так, як це роблять
-люди — групами, а не по одній цифрі: 0632096974 — «нуль шістдесят три
-<break time="0.4s" /> двісті дев'ять <break time="0.4s" /> шістдесят дев'ять
-сімдесят чотири». Сама вирішуй, як розбити номер на групи, аби його було легко
-впізнати на слух. Ланцюжок окремих цифр звучить монотонно, і {biz.customer_nom} у
-ньому губиться. Спитай, чи правильно записала, і дочекайся підтвердження.
-В інструмент передавай номер ЦИФРАМИ (0632096974), а не словами.
-Якщо інструмент повернув помилку про кількість цифр — не сперечайся й не
-вигадуй номер: перепитай його ще раз."""
+    return L.text("prompt.phone_rules", customer_nom=biz.customer_nom)
 
 
 def _intake_rules(biz: Business) -> str:
@@ -448,16 +414,12 @@ def _intake_rules(biz: Business) -> str:
     lines = "\n".join(
         "   - {}{}{}".format(
             f.label,
-            " (обов'язково)" if f.required else " (якщо скаже сам)",
+            L.text("prompt.intake.item_required" if f.required else "prompt.intake.item_optional"),
             f" — {f.description}" if f.description else "",
         )
         for f in fields
     )
-    return (
-        "\n   Також дізнайся:\n" + lines
-        + "\n   Питай по одному за раз, у розмові, а не списком підряд — це дзвінок,"
-        "\n   а не анкета. Що вже прозвучало саме — не перепитуй."
-    )
+    return L.text("prompt.intake.header") + lines + L.text("prompt.intake.footer")
 
 
 def _booking_flow(biz: Business) -> str:
@@ -465,95 +427,73 @@ def _booking_flow(biz: Business) -> str:
     gets collected: a range of days (hotel) or a date and time (clinic,
     barbershop)."""
     bk = biz.booking
-    cust_nom = biz.customer_nom
 
     if bk.is_slots:
-        collect = (
-            f"1. Тобі потрібні: {bk.resource_label}, дата і час.\n"
-            f"   Якщо {cust_nom} каже розпливчасто («десь зранку», «у вівторок») — назви\n"
-            "   конкретний час і спитай, чи підходить, а не проси уточнити.\n"
-            "2. Виклич check_availability. Якщо час зайнятий, інструмент поверне вільні\n"
-            "   варіанти — назви два-три на вибір, не перелічуй усі.\n"
-            "   Тривалість і ціну не вигадуй, бери з відповіді інструмента.\n"
-            "   Це стосується й часу, який пропонуєш ТИ САМА: спершу перевір його\n"
-            "   інструментом і назви вголос, лише якщо той підтвердив, що вільно.\n"
-            "   Інакше ти пообіцяєш годину, якої може не бути, і доведеться\n"
-            "   переігрувати вже домовлений запис."
+        collect = L.text(
+            "prompt.booking.collect_slots",
+            resource_label=bk.resource_label,
+            customer_nom=biz.customer_nom,
         )
     else:
-        party = f", {bk.party_label}" if bk.ask_party else ""
-        collect = (
-            f"1. Тобі потрібні: {bk.start_label}, {bk.end_label}, {bk.resource_label}{party}.\n"
-            f"   Якщо {cust_nom} уже чітко назвав щось із цього — НЕ перепитуй це окремо,\n"
-            "   одразу переходь до перевірки. Питай лише те, чого справді бракує.\n"
-            "2. Виклич check_availability, щоб дізнатися наявність і повну вартість.\n"
-            f"   Назви їх {biz.customer_dat}.\n"
-            f"   {bk.unit.capitalize()} рахується від заїзду до виїзду: день виїзду НЕ\n"
-            "   рахується (з 19-го по 21-ше — це дві ночі).\n"
-            "   Дати, кількість і суму НЕ рахуй сама — бери рівно те, що прийшло в\n"
-            "   полі spoken, і перекажи його словами. Інакше ти назвеш уголос одні\n"
-            "   числа, а в системі опиняться інші."
+        collect = L.text(
+            "prompt.booking.collect_nights",
+            start_label=bk.start_label,
+            end_label=bk.end_label,
+            resource_label=bk.resource_label,
+            party=L.text("prompt.booking.party_suffix", party_label=bk.party_label)
+            if bk.ask_party
+            else "",
+            customer_nom=biz.customer_nom,
+            customer_dat=biz.customer_dat,
+            unit_cap=bk.unit.capitalize(),
         )
-    recap = biz.speech_recap or (
-        f"назви {bk.resource_label}, час, ім'я та повну вартість — одним плавним реченням"
+
+    recap = biz.speech_recap or L.text(
+        "prompt.booking.recap_fallback", resource_label=bk.resource_label
     )
 
-    return f"""{bk.action.upper()} — працюй ТІЛЬКИ через інструменти, не вигадуй наявність і ціни:
-{collect}
-3. Якщо вільно і {cust_nom} згоден — попроси ім'я та номер телефону.{_intake_rules(biz)}
-{_phone_rules(biz)}
-4. Перед створенням ОБОВ'ЯЗКОВО повтори вголос усі деталі разом. Каркас
-   фрази (кутові дужки — підстав СВОЇ дані з розмови, не вигадуй):
-   («{recap}»)
-   Телефон тут повторно НЕ називай — його вже підтвердили на кроці 3.
-   НЕ скорочуй це до одного питання про ціну — {cust_nom} має почути все.
-5. ТІЛЬКИ після усного «так» на повний переказ виклич create_booking.
-   Щойно він повернув success — БІЛЬШЕ НЕ ВИКЛИКАЙ ЖОДНОГО ІНСТРУМЕНТА в цьому
-   ході. Ні take_message (запис уже створено, дублювати його запитом на дзвінок
-   означає гнати колег на зайвий передзвін), ні повторний create_booking.
-   Просто назви номер (ref_code) чітко, як звичайне число, і подякуй — усе одним
-   плавним реченням.
-Якщо вільного місця немає — вибачся і запропонуй інший час або інший варіант.
-
-НІКОЛИ не оголошуй перевірку окремою реплікою і не чекай згоди на неї. Якщо в
-тебе вже є все потрібне — ВИКЛИКАЙ інструмент у цьому ж ході, без фраз «зараз
-перевірю, мить» з подальшим мовчанням. {cust_nom.capitalize()} не мусить нічого
-відповідати, щоб перевірка відбулася."""
+    return L.text(
+        "prompt.booking.body",
+        action_upper=bk.action.upper(),
+        collect=collect,
+        customer_nom=biz.customer_nom,
+        customer_nom_cap=biz.customer_nom.capitalize(),
+        intake_rules=_intake_rules(biz),
+        phone_rules=_phone_rules(biz),
+        recap=recap,
+    )
 
 
 def build_system_prompt(biz: Business | None = None) -> str:
     biz = biz or BUSINESS
     now = biz.now()
-    today = now.date().isoformat()
-    weekday = WEEKDAYS_UK[now.weekday()]
     bk = biz.booking
 
     blocks = [
-        f"Ти — {biz.agent_name}, {biz.persona} ({biz.name}).\nРозмовляй природною українською мовою.",
+        L.text("prompt.identity", agent_name=biz.agent_name, persona=biz.persona, name=biz.name),
         _speech_rules(biz),
         # The time, not only the date: without it the model does not know what
         # "now" or "in an hour" mean — and for an emergency service that is the
         # main kind of request.
-        f"Сьогодні {today}, {weekday}, зараз {now.strftime('%H:%M')}.\n"
-        f"Коли {biz.customer_nom} називає дату чи час усно\n"
-        "(«чотирнадцятого липня», «наступного вівторка», «десь після обіду»), сам\n"
-        "переведи це у формат РРРР-ММ-ДД"
-        + (" і ГГ:ХХ" if bk.is_slots else "")
-        + ". Якщо рік не названо — бери найближчий майбутній.",
-        f"ПРО ЗАКЛАД:\n{biz.knowledge}",
+        L.text(
+            "prompt.date_hint",
+            today=now.date().isoformat(),
+            weekday=WEEKDAY_NAMES[now.weekday()],
+            time=now.strftime("%H:%M"),
+            customer_nom=biz.customer_nom,
+            slots_suffix=L.text("prompt.date_hint_slots_suffix") if bk.is_slots else "",
+        ),
+        L.text("prompt.about", knowledge=biz.knowledge),
     ]
     if bk.enabled:
         blocks.append(_booking_flow(biz))
 
     blocks.append(
-        f"""Якщо питання поза межами {bk.action_gen if bk.enabled else 'твоїх повноважень'}
-({biz.escalation_examples}) — чесно скажи, що уточниш у колег і вони передзвонять.
-Попроси ім'я та телефон (телефон теж повтори групами цифр) і виклич take_message.
-НЕ вигадуй відповідь і не кажи «записала», доки інструмент не підтвердив запис.
-
-take_message — це ЗАМІНА відповіді, а не додаток до неї. Після успішного
-create_booking не виклика́й більше нічого: сам запис уже є, і дублювати його
-запитом на дзвінок означає засмічувати роботу закладу зайвими передзвонами."""
+        L.text(
+            "prompt.escalation",
+            scope=bk.action_gen if bk.enabled else L.text("prompt.escalation_scope_fallback"),
+            escalation_examples=biz.escalation_examples,
+        )
     )
     return "\n\n".join(blocks)
 
@@ -561,10 +501,7 @@ create_booking не виклика́й більше нічого: сам зап�
 def greeting_hint(biz: Business | None = None) -> str:
     """A hint for the model's first line — the agent greets, not the caller."""
     biz = biz or BUSINESS
-    return (
-        f"Привітайся першою, дуже коротко, як {biz.persona} ({biz.name}), "
-        "і запитай, чим можеш допомогти."
-    )
+    return L.text("prompt.greeting_hint", persona=biz.persona, name=biz.name)
 
 
 def slot_grid(day: date, biz: Business | None = None) -> list[datetime]:
