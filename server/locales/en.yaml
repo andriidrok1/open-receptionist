@@ -193,6 +193,18 @@ prompt:
       say the {resource_label}, the time, the name and the full price — in one
       smooth sentence
 
+    changes: |-
+      IF THE CALLER WANTS TO CANCEL OR MOVE SOMETHING:
+      1. If they give you a reference, use it. If not, ask for their phone
+         number and call find_booking. Don't ask them to remember a reference —
+         people don't, and they do remember their own number.
+      2. If there is more than one booking, list them briefly and ask which.
+      3. ALWAYS say out loud which booking you are about to change and wait for
+         a yes. Cancelling the wrong one is worse than cancelling none.
+      4. To move a booking, check the new time with check_availability first and
+         only then call reschedule_booking. The reference does not change — say
+         so.
+
     body: |-
       {action_upper} — work ONLY through the tools, never invent availability or prices:
       {collect}
@@ -212,6 +224,8 @@ prompt:
          Just say the reference number clearly, as an ordinary number, and thank
          them — all in one smooth sentence.
       If there's nothing free, apologise and offer another time or another option.
+
+      {changes}
 
       NEVER announce that you're about to check, and never wait for permission to
       do it. If you already have what you need, CALL the tool in this same turn —
@@ -236,6 +250,16 @@ tools:
     Create the {action} in the business's system. Call this ONLY after you have
     read all the details back out loud and the {customer_nom} has explicitly
     agreed.
+  ref_code_arg: The booking reference the caller gave (e.g. APT-1234)
+  find_booking: >-
+    Find upcoming bookings by phone number. Call this when the caller wants to
+    cancel or move something but does not remember the reference.
+  cancel_booking: >-
+    Cancel a booking by its reference. Call this ONLY after you have said out
+    loud which booking you are cancelling and the caller has confirmed.
+  reschedule_booking: >-
+    Move an existing booking to a different time. The reference stays the same.
+    Call this ONLY after the caller has confirmed the new time out loud.
   take_message: >-
     Record a callback request. Call this when a question falls outside {action}
     and you have promised that someone will call back. Get the name and phone
@@ -289,6 +313,13 @@ errors:
   intake_missing: "missing details: {fields}"
   no_space: there's nothing free at that time
   message_no_topic: the question itself wasn't given
+  nothing_booked: >-
+    there is nothing upcoming on that number — ask for the number again, or
+    who the booking is under
+  booking_not_found: >-
+    there is no booking with reference {ref_code} — ask for it again, or look
+    the booking up by phone number
+  booking_already_cancelled: that booking has already been cancelled
   tool_unknown: unknown tool {name}
   # The store is unreachable. Not the caller's fault, and repeating the question
   # will not help.

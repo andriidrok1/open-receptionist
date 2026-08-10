@@ -214,6 +214,9 @@ def init_db() -> None:
                 phone         TEXT NOT NULL,
                 total_price   INTEGER NOT NULL,
                 details       TEXT,
+                -- active | cancelled. A booking is never deleted: the business
+                -- needs to see that someone called and then called off.
+                status        TEXT NOT NULL DEFAULT 'active',
                 created_at    TEXT NOT NULL DEFAULT (datetime('now'))
             )
             """
@@ -248,18 +251,35 @@ def init_db() -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(bookings)")}
         if "details" not in cols:
             conn.execute("ALTER TABLE bookings ADD COLUMN details TEXT")
+        if "status" not in cols:
+            conn.execute(
+                "ALTER TABLE bookings ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+            )
         conn.commit()
 
 
-def _occupied(conn: sqlite3.Connection, resource: str, starts_at: str, ends_at: str) -> int:
-    """How many units of the resource are already taken over this interval."""
+def _occupied(
+    conn: sqlite3.Connection,
+    resource: str,
+    starts_at: str,
+    ends_at: str,
+    exclude_ref: str | None = None,
+) -> int:
+    """How many units of the resource are already taken over this interval.
+
+    exclude_ref leaves one booking out of the count. Rescheduling needs it:
+    moving 10:00 to 10:30 overlaps the booking being moved, so without this the
+    appointment would collide with itself and the move would be refused.
+    """
     row = conn.execute(
         """
         SELECT COUNT(*) AS cnt FROM bookings
         WHERE resource = ?
+          AND status = 'active'
+          AND ref_code IS NOT ?
           AND NOT (ends_at <= ? OR starts_at >= ?)
         """,
-        (resource, starts_at, ends_at),
+        (resource, exclude_ref, starts_at, ends_at),
     ).fetchone()
     return row["cnt"]
 
@@ -441,6 +461,7 @@ def check_availability(
     start: str,
     end: str | None = None,
     party_size: int = 1,
+    exclude_ref: str | None = None,
 ) -> dict:
     """Is it free, and what does it cost. One entry point for both time models.
 
@@ -471,7 +492,7 @@ def check_availability(
         return {"error": _err("party_too_large", max=BOOK.max_party)}
 
     with _connect() as conn:
-        left = res.capacity - _occupied(conn, key, starts_at, ends_at)
+        left = res.capacity - _occupied(conn, key, starts_at, ends_at, exclude_ref)
 
     out = {
         "available": left > 0,
@@ -619,6 +640,142 @@ def create_booking(
     }
 
 
+# --------------------- changing an existing booking ---------------------
+#
+# Until now a booking could only be created. That made every mistake permanent —
+# including the agent's own, when it created one before the caller confirmed —
+# and made "move it to tomorrow", probably the second most common call a
+# receptionist gets, impossible to serve.
+#
+# Nothing is ever deleted: a cancelled booking keeps its row with status
+# 'cancelled', because the business wants to see that someone booked and then
+# called it off.
+
+
+def find_bookings(phone: str) -> dict:
+    """Active, still-upcoming bookings for a phone number.
+
+    Callers do not remember reference codes; they remember their own number, and
+    on a phone line it is the one thing the system already knows about them.
+
+    Worth stating plainly: this is not authentication. Anyone who knows a number
+    can ask what is booked against it. On a real line the caller ID makes that
+    reasonable; over the browser demo it is simply an open lookup, and a
+    business handling sensitive appointments needs more than this.
+    """
+    phone, error = validate_phone(phone)
+    if error:
+        return {"error": error}
+    now = BIZ.now().strftime(_ISO_MIN) if BOOK.is_slots else BIZ.today().isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM bookings WHERE phone = ? AND status = 'active'"
+            " AND ends_at >= ? ORDER BY starts_at",
+            (phone, now),
+        ).fetchall()
+    found = [
+        {
+            "ref_code": r["ref_code"],
+            "resource_label": (BOOK.resource(r["resource"]) or BOOK.resources[0]).label,
+            "starts_at": r["starts_at"],
+            "ends_at": r["ends_at"],
+            "customer_name": r["customer_name"],
+            "total_price": r["total_price"],
+            "spoken": _spoken(
+                (BOOK.resource(r["resource"]) or BOOK.resources[0]).label,
+                r["starts_at"],
+                r["ends_at"],
+                _units_of(r),
+                r["total_price"],
+            ),
+        }
+        for r in rows
+    ]
+    if not found:
+        return {"found": 0, "error": _err("nothing_booked")}
+    return {"found": len(found), "bookings": found}
+
+
+def _active_booking(conn: sqlite3.Connection, ref_code: str):
+    return conn.execute(
+        "SELECT * FROM bookings WHERE ref_code = ?", ((ref_code or "").strip().upper(),)
+    ).fetchone()
+
+
+def cancel_booking(ref_code: str) -> dict:
+    """Cancel a booking by its reference code."""
+    with _connect() as conn:
+        row = _active_booking(conn, ref_code)
+        if row is None:
+            return {"success": False, "error": _err("booking_not_found", ref_code=ref_code)}
+        if row["status"] != "active":
+            return {"success": False, "error": _err("booking_already_cancelled")}
+        conn.execute(
+            "UPDATE bookings SET status = 'cancelled' WHERE ref_code = ?", (row["ref_code"],)
+        )
+        conn.commit()
+    label = (BOOK.resource(row["resource"]) or BOOK.resources[0]).label
+    return {
+        "success": True,
+        "ref_code": row["ref_code"],
+        "spoken": _spoken(
+            label, row["starts_at"], row["ends_at"], _units_of(row), row["total_price"]
+        ),
+    }
+
+
+def reschedule_booking(
+    ref_code: str, start: str, end: str | None = None, resource: str | None = None
+) -> dict:
+    """Move a booking to a new time, keeping its reference code.
+
+    The new slot is checked exactly as a fresh booking would be — hours, horizon,
+    capacity — with this booking left out of the count, so it does not collide
+    with itself.
+    """
+    with _connect() as conn:
+        row = _active_booking(conn, ref_code)
+    if row is None:
+        return {"success": False, "error": _err("booking_not_found", ref_code=ref_code)}
+    if row["status"] != "active":
+        return {"success": False, "error": _err("booking_already_cancelled")}
+
+    label = resource or (BOOK.resource(row["resource"]) or BOOK.resources[0]).label
+    avail = check_availability(
+        label, start, end, row["party_size"], exclude_ref=row["ref_code"]
+    )
+    if avail.get("error"):
+        return {"success": False, "error": avail["error"]}
+    if not avail["available"]:
+        out = {"success": False, "error": _err("no_space")}
+        if avail.get("alternatives"):
+            out["alternatives"] = avail["alternatives"]
+            out["alternatives_spoken"] = avail.get("alternatives_spoken")
+        return out
+
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE bookings SET resource = ?, starts_at = ?, ends_at = ?, total_price = ?"
+            " WHERE ref_code = ?",
+            (
+                avail["resource"],
+                avail["starts_at"],
+                avail["ends_at"],
+                avail["total_price"],
+                row["ref_code"],
+            ),
+        )
+        conn.commit()
+    return {
+        "success": True,
+        "ref_code": row["ref_code"],
+        "spoken": avail.get("spoken", ""),
+        "starts_at": avail["starts_at"],
+        "ends_at": avail["ends_at"],
+        "total_price": avail["total_price"],
+    }
+
+
 def log_event(kind: str, detail: str | None = None) -> None:
     """Record something the agent did. Swallows errors on purpose: the log must
     never be able to break a call."""
@@ -697,6 +854,7 @@ def list_bookings() -> list[dict]:
                 "units": _units_of(r),
                 "party_size": r["party_size"],
                 "total_price": r["total_price"],
+                "status": r["status"],
                 "details": json.loads(r["details"]) if r["details"] else {},
                 "created_at": _to_business_time(r["created_at"]),
             }

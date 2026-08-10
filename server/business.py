@@ -512,6 +512,7 @@ def _booking_flow(biz: Business) -> str:
 
     return biz.pack.text(
         "prompt.booking.body",
+        changes=biz.pack.text("prompt.booking.changes"),
         action_upper=bk.action.upper(),
         collect=collect,
         customer_nom=biz.customer_nom,

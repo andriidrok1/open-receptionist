@@ -252,3 +252,103 @@ def test_take_message_without_a_name_is_labelled_not_invented():
     out = crm.take_message("", "0632096974", "питання")
     assert out["success"]
     assert crm.list_messages()[0]["customer_name"]
+
+
+# ------------------- changing an existing booking -------------------
+#
+# Until these existed a booking could only be created, so every mistake was
+# permanent — including the agent's own — and "move it to tomorrow" could not be
+# served at all.
+
+
+def _fresh_booking(day_offset: int = 40):
+    out = crm.create_booking(
+        ROOM, iso(day_offset), "Тарас Мельник", "0632096974", iso(day_offset + 2)
+    )
+    assert out["success"], out
+    return out
+
+
+def test_find_bookings_by_phone():
+    """Callers remember their own number, never a reference code."""
+    made = _fresh_booking(41)
+    found = crm.find_bookings("063 209 69 74")
+    assert found["found"] >= 1
+    assert any(b["ref_code"] == made["ref_code"] for b in found["bookings"])
+    assert all(b["spoken"] for b in found["bookings"])
+
+
+def test_find_bookings_on_an_unknown_number_explains_itself():
+    out = crm.find_bookings("0501112233")
+    assert out.get("found", 0) == 0 and out["error"]
+
+
+def test_cancelling_frees_the_slot():
+    """A cancelled booking must stop occupying its resource."""
+    resource = BUSINESS.booking.resources[0]
+    start, end = iso(50), iso(51)
+    made = [
+        crm.create_booking(resource.label, start, f"Тест Місце{i}", "0632096974", end)
+        for i in range(resource.capacity)
+    ]
+    assert all(m["success"] for m in made)
+    assert crm.check_availability(resource.label, start, end)["available"] is False
+
+    assert crm.cancel_booking(made[0]["ref_code"])["success"]
+    assert crm.check_availability(resource.label, start, end)["available"] is True
+
+
+def test_cancelling_twice_is_refused_not_silently_repeated():
+    made = _fresh_booking(42)
+    assert crm.cancel_booking(made["ref_code"])["success"]
+    again = crm.cancel_booking(made["ref_code"])
+    assert not again["success"] and again["error"]
+
+
+def test_cancelling_an_unknown_reference_says_so():
+    out = crm.cancel_booking("БР-0000")
+    assert not out["success"] and "0000" in out["error"]
+
+
+def test_a_cancelled_booking_is_kept_not_deleted():
+    """The business wants to see that someone booked and then called it off."""
+    made = _fresh_booking(43)
+    crm.cancel_booking(made["ref_code"])
+    row = [b for b in crm.list_bookings() if b["ref_code"] == made["ref_code"]]
+    assert row and row[0]["status"] == "cancelled"
+
+
+def test_rescheduling_keeps_the_reference():
+    made = _fresh_booking(44)
+    moved = crm.reschedule_booking(made["ref_code"], iso(46), iso(47))
+    assert moved["success"], moved
+    assert moved["ref_code"] == made["ref_code"]
+    assert moved["starts_at"] == iso(46)
+
+
+def test_rescheduling_does_not_collide_with_itself():
+    """Moving 10:00 to 10:30 overlaps the booking being moved.
+
+    Without excluding it from the occupancy count the appointment competes with
+    itself and the move is refused for no reason a caller could understand.
+    """
+    resource = BUSINESS.booking.resources[0]
+    made = crm.create_booking(
+        resource.label, iso(60), "Тарас Мельник", "0632096974", iso(63)
+    )
+    assert made["success"]
+    moved = crm.reschedule_booking(made["ref_code"], iso(61), iso(64))
+    assert moved["success"], moved
+
+
+def test_rescheduling_into_the_past_is_refused():
+    made = _fresh_booking(45)
+    out = crm.reschedule_booking(made["ref_code"], iso(-3), iso(-1))
+    assert not out["success"] and out["error"]
+
+
+def test_rescheduling_a_cancelled_booking_is_refused():
+    made = _fresh_booking(48)
+    crm.cancel_booking(made["ref_code"])
+    out = crm.reschedule_booking(made["ref_code"], iso(52), iso(53))
+    assert not out["success"] and out["error"]

@@ -133,10 +133,41 @@ TAKE_MESSAGE_SCHEMA = FunctionSchema(
 )
 
 
+REF_CODE_PROP = {"type": "string", "description": L.text("tools.ref_code_arg")}
+
+FIND_BOOKING_SCHEMA = FunctionSchema(
+    name="find_booking",
+    description=L.text("tools.find_booking"),
+    properties={"phone": {"type": "string", "description": PHONE_DESC}},
+    required=["phone"],
+)
+
+CANCEL_BOOKING_SCHEMA = FunctionSchema(
+    name="cancel_booking",
+    description=L.text("tools.cancel_booking"),
+    properties={"ref_code": REF_CODE_PROP},
+    required=["ref_code"],
+)
+
+RESCHEDULE_BOOKING_SCHEMA = FunctionSchema(
+    name="reschedule_booking",
+    description=L.text("tools.reschedule_booking"),
+    properties={"ref_code": REF_CODE_PROP, **_when_props()},
+    required=["ref_code", *_when_props()],
+)
+
+
 def tools_schema() -> ToolsSchema:
     standard = [TAKE_MESSAGE_SCHEMA]
     if BOOK.enabled:
-        standard = [CHECK_AVAILABILITY_SCHEMA, CREATE_BOOKING_SCHEMA, TAKE_MESSAGE_SCHEMA]
+        standard = [
+            CHECK_AVAILABILITY_SCHEMA,
+            CREATE_BOOKING_SCHEMA,
+            FIND_BOOKING_SCHEMA,
+            CANCEL_BOOKING_SCHEMA,
+            RESCHEDULE_BOOKING_SCHEMA,
+            TAKE_MESSAGE_SCHEMA,
+        ]
     return ToolsSchema(standard_tools=standard)
 
 
@@ -192,6 +223,13 @@ def _call_tool(name: str, args: dict) -> dict:
             party_size=_party(args),
             details={f.key: args.get(f.key) for f in BOOK.intake},
         )
+    if name == "find_booking":
+        return crm.find_bookings(args.get("phone"))
+    if name == "cancel_booking":
+        return crm.cancel_booking(args.get("ref_code"))
+    if name == "reschedule_booking":
+        start, end = _when(args)
+        return crm.reschedule_booking(args.get("ref_code"), start, end)
     if name == "take_message":
         return crm.take_message(args.get("customer_name"), args.get("phone"), args.get("topic"))
     return {"error": L.text("errors.tool_unknown", name=name)}

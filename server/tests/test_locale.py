@@ -77,7 +77,8 @@ def test_reference_pack_uses_only_names_the_code_passes(lang=REFERENCE):
         "intake_rules", "phone_rules", "recap", "count", "unit", "max", "days",
         "now", "hours", "opens", "closes", "duration", "resource", "known",
         "fields", "price", "currency", "day", "month", "label", "date",
-        "start", "end", "units", "money", "action", "topic", "n",
+        "start", "end", "units", "money", "action", "topic", "n", "changes",
+        "ref_code",
     }
     pack = load_locale(lang)
     unknown = {k: _placeholders(pack, k) - known for k in REQUIRED_KEYS

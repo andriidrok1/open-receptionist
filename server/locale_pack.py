@@ -101,6 +101,9 @@ REQUIRED_KEYS = (
     "errors.no_space",
     "errors.message_no_topic",
     "errors.tool_unknown",
+    "errors.nothing_booked",
+    "errors.booking_not_found",
+    "errors.booking_already_cancelled",
     "notes.message_recorded",
     "notes.call_time_limit",
     "ui.duration_min",
@@ -138,6 +141,11 @@ REQUIRED_KEYS = (
     "tools.check_availability_slots_suffix",
     "tools.create_booking",
     "tools.take_message",
+    "tools.find_booking",
+    "tools.cancel_booking",
+    "tools.reschedule_booking",
+    "tools.ref_code_arg",
+    "prompt.booking.changes",
 )
 
 
