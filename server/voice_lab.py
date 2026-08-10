@@ -448,7 +448,7 @@ def cmd_final(args):
     """
     check_key()
     sys.path.insert(0, str(SERVER_DIR))
-    from speech_text import UkrainianSpeechFilter
+    from speech_text import SpeechTextFilter
 
     state = _load_state()
     target = next(
@@ -460,7 +460,7 @@ def cmd_final(args):
 
     stab = float(os.getenv("ELEVENLABS_STABILITY", "0.4"))
     style = float(os.getenv("ELEVENLABS_STYLE", "1.0"))
-    speech = UkrainianSpeechFilter()
+    speech = SpeechTextFilter()
 
     lines = [
         "Готель «Рів'єра», мене звати Оксана. Чим можу допомогти?",

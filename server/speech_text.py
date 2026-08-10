@@ -1,36 +1,35 @@
-"""speech_text.py — підготовка тексту LLM до озвучення (українська).
+"""speech_text.py — preparing the LLM's text for speech synthesis.
 
-ElevenLabs не розуміє змісту — він озвучує те, як написано. Тому цей шар
-чистить розмітку пауз перед синтезом.
+ElevenLabs does not understand meaning; it voices what is written. This layer
+cleans up pause markup before synthesis.
 
-**break-теги** дають точну паузу там, де її не задати пунктуацією (між
-блоками цифр телефону, перед ціною). Але ElevenLabs прямо попереджає: від
-надлишку тегів мовлення розганяється й з'являються артефакти — тому тут
-санітайзер: не більше `MAX_BREAKS` на репліку, кожна не довша за
-`MAX_BREAK_SEC`. Модель у промпті теж просять ставити максимум два, але
-покладатись на це не можна.
+**break tags** put a pause exactly where punctuation cannot — between blocks of
+digits in a phone number, before a price. But ElevenLabs warns explicitly that
+too many of them make speech accelerate and produce artifacts, hence the
+sanitiser here: at most `MAX_BREAKS` per reply, none longer than
+`MAX_BREAK_SEC`. The prompt asks the model for at most two as well, but that is
+not something to rely on.
 
 ---
-ЩО ТУТ БУЛО І ЧОМУ ЗНИКЛО (перевірено на слух 09.08.2026).
+WHAT USED TO BE HERE AND WHY IT IS GONE (judged by ear, 2026-08-09).
 
-Тут стояла розстановка наголосів: словник `ukrainian-word-stress` (2.9 млн
-словоформ) ставив комбінований акут U+0301 у кожне слово, плюс доменний шар
-для «Рів'є́ра», «Делю́кс», «бро́ні». Логіка була така: модель вгадує наголос за
-написанням і промахується на числівниках і датах — саме там, де в нас ціни й
-телефони.
+This module used to place lexical stress marks: the `ukrainian-word-stress`
+dictionary (2.9M word forms) put a combining acute U+0301 into every word, plus
+a domain layer for the hotel's own vocabulary. The reasoning: the model guesses
+stress from spelling and gets it wrong on numerals and dates — exactly where our
+prices and phone numbers live.
 
-Гіпотеза НЕ підтвердилась. У сліпому порівнянні (voice_lab final/domain)
-сирий текст звучить краще і за суцільну розмітку, і за точкову.
+The hypothesis did NOT hold. In a blind comparison the raw text sounded better
+than both blanket and targeted markup.
 
-Причина: проблема з наголосами була властивістю АНГЛІЙСЬКОГО голосу (Sarah),
-який читав українську навмання. Нативний український голос (Kateryna Pavlenko,
-fine-tuned під flash v2.5) ставить наголоси сам, а незвичні символи в тексті
-його лише збивають.
+The reason: the stress problem was a property of the ENGLISH voice that was
+reading Ukrainian at the time. A native voice, fine-tuned for the model in use,
+places stress correctly on its own, and unusual characters only confuse it.
 
-Висновок на майбутнє: **наголоси — це лікування не тієї хвороби. Спершу
-нативний голос.** Якщо колись зміниться голос чи модель — гіпотезу варто
-перевірити наново: `pip install --no-deps ukrainian-word-stress marisa-trie`,
-далі `Stressifier(stress_symbol=StressSymbol.CombiningAcuteAccent)`.
+Lesson worth keeping: **stress marks treat the wrong disease. Get a native voice
+for the language first.** If the voice or the model ever changes, the hypothesis
+is worth re-testing: `pip install --no-deps ukrainian-word-stress marisa-trie`,
+then `Stressifier(stress_symbol=StressSymbol.CombiningAcuteAccent)`.
 """
 
 import re
@@ -46,21 +45,22 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-MAX_BREAKS = 2  # більше — і мовлення починає розганятись
+MAX_BREAKS = 2  # any more and the speech starts to race
 MAX_BREAK_SEC = 0.6
 
-# Модель пише тег як завгодно: без самозакриття, в одинарних лапках, з іншим
-# атрибутом. Вузький шаблон бачив лише канонічну форму, решта йшла в синтез
-# як є — повз ліміт на кількість і повз обрізання довжини.
+# The model writes the tag however it likes: without the self-closing slash, in
+# single quotes, with a different attribute. A narrow pattern only matched the
+# canonical form and let the rest through to synthesis untouched — past the
+# count limit and past the duration clamp.
 _BREAK_RE = re.compile(r"""<break\s+time=["'](\d*\.?\d+)s["']\s*/?>""", re.I)
 _ANY_TAG_RE = re.compile(r"<[^>]*>")
 
 
 def sanitize_breaks(text: str) -> str:
-    """Лишити максимум MAX_BREAKS тегів, кожен не довший за MAX_BREAK_SEC.
+    """Keep at most MAX_BREAKS tags, none longer than MAX_BREAK_SEC.
 
-    Усе інше, що виглядає як розмітка, прибираємо: ElevenLabs із увімкненим
-    SSML нерозпізнаний тег у кращому разі проігнорує, у гіршому — озвучить.
+    Anything else that looks like markup is stripped: with SSML parsing enabled,
+    ElevenLabs will at best ignore an unrecognised tag and at worst read it out.
     """
     kept = 0
 
@@ -73,25 +73,27 @@ def sanitize_breaks(text: str) -> str:
         return f'<break time="{secs}s" />'
 
     text = _BREAK_RE.sub(repl, text)
-    # Захист від решти розмітки: свої break-теги вже стоять, тож вирізаємо
-    # тільки те, що не є ними.
+    # Guard against any remaining markup. Our own break tags are already in
+    # place, so cut only what is not one of them.
     return _ANY_TAG_RE.sub(lambda m: m.group(0) if m.group(0).startswith("<break ") else " ", text)
 
 
-class UkrainianSpeechFilter:
-    """Фільтр тексту перед TTS. Реалізує інтерфейс pipecat BaseTextFilter.
+class SpeechTextFilter:
+    """Text filter applied before TTS. Implements pipecat's BaseTextFilter.
 
-    Наслідування зроблено «м'яким» (без імпорту pipecat), щоб модуль лишався
-    імпортовним і тестованим окремо від пайплайна.
+    The interface is implemented structurally rather than by inheritance, so the
+    module stays importable and testable on its own, without the pipeline.
+
+    Language-agnostic: it only deals with pause markup, not with words.
     """
 
     def prepare(self, text: str) -> str:
-        """Уся обробка одним викликом — зручно тестувати без пайплайна."""
+        """All processing in one call — convenient to test without a pipeline."""
         if not text or not text.strip():
             return text
         return sanitize_breaks(text)
 
-    # --- інтерфейс pipecat BaseTextFilter ---
+    # --- pipecat BaseTextFilter interface ---
 
     async def filter(self, text: str) -> str:
         return self.prepare(text)
@@ -106,44 +108,35 @@ class UkrainianSpeechFilter:
         pass
 
 
-if __name__ == "__main__":
-    f = UkrainianSpeechFilter()
-    samples = [
-        "Так, дивлюся — Покращений на двох є, з чотирнадцятого по сімнадцяте.",
-        'Записую.<break time="0.4s" /> Три ночі.<break time="2s" /> Телефон:'
-        '<break time="0.3s" /> нуль шістдесят сім<break time="0.3s" /> двісті тридцять чотири.',
-    ]
-    for s in samples:
-        print("\nIN :", s)
-        print("OUT:", f.prepare(s))
-
-
 class WholeReplyAggregator(FrameProcessor):
-    """Копити відповідь LLM і віддати її в TTS одним шматком.
+    """Collect the LLM's reply and hand it to TTS in one piece.
 
-    За замовчуванням pipecat синтезує по реченню: перше речення йде в озвучення,
-    поки модель ще дописує друге. Це найкоротша затримка, але інтонація
-    будується в межах речення — синтезатор не знає, що далі буде ще фраза, і
-    кожну завершує крапкою. Репліка з трьох речень звучить як три окремі
-    оголошення.
+    By default pipecat synthesises sentence by sentence: the first sentence is
+    already being spoken while the model is still writing the second. That is
+    the lowest possible latency, but intonation is then built within a single
+    sentence — the synthesiser does not know another phrase is coming, so it
+    closes each one with a full stop. A three-sentence reply sounds like three
+    separate announcements.
 
-    Тут ми чекаємо кінця відповіді й віддаємо весь текст разом: інтонація
-    тягнеться через усю репліку, ціна не падає в порожнечу, питання в кінці
-    звучить питанням. Платимо затримкою — бот мовчить, доки модель не допише.
+    Here we wait for the end of the reply and send the whole text at once:
+    intonation carries across the reply, the price does not land in a vacuum,
+    and a closing question actually sounds like a question. The cost is latency
+    — the bot stays silent until the model has finished writing.
 
-    Віддаємо `AggregatedTextFrame`, а не звичайний `TextFrame`: він іде повз
-    внутрішній агрегатор TTS. Простий текст той спершу синтезує, а потім ще раз
-    вивалює з власного буфера на кінці відповіді — репліка озвучувалась двічі.
+    We emit an `AggregatedTextFrame` rather than a plain `TextFrame` because it
+    bypasses the TTS service's own aggregator. Plain text gets synthesised once
+    and then flushed again from that internal buffer at the end of the response,
+    so every reply was voiced twice.
 
-    Тут же і санітайзер пауз — раніше він стояв у `text_filters` самого TTS, і
-    це псувало текст. Фільтр міняє рядок, який іде в синтез, але вихідний
-    лишається як був; трекер вимовлених слів веде курсор по обох одночасно, а
-    теги різної довжини («2s» → «0.6s») курсор зсувають. У підсумку в історію
-    діалога й на екран потрапляло «Ваш лефон: нул шістдесят три» — з літерами,
-    вигризеними посеред слів. Санітайзимо ДО того, як текст роздвоївся: у
-    синтез і в контекст іде один і той самий рядок.
+    The pause sanitiser lives here too. It used to sit in the TTS service's
+    `text_filters`, and that corrupted text: a filter changes the string that
+    goes to synthesis while the original stays as it was, and the spoken-word
+    tracker walks both cursors in step. Tags of different lengths ("2s" ->
+    "0.6s") shift one cursor relative to the other, and the conversation history
+    ended up with letters chewed out of the middle of words. Sanitising before
+    the text forks means synthesis and context receive the exact same string.
 
-    Ставити між LLM і TTS.
+    Place between the LLM and TTS.
     """
 
     def __init__(self, **kwargs):
@@ -168,11 +161,23 @@ class WholeReplyAggregator(FrameProcessor):
         elif self._collecting and isinstance(frame, TextFrame) and not isinstance(
             frame, (TTSTextFrame,)
         ):
-            # Текст притримуємо; далі він піде одним фреймом.
+            # Hold the text back; it will go out as a single frame.
             self._parts.append(frame.text)
         elif isinstance(frame, InterruptionFrame):
-            # Перебили — недописане нікому не потрібне.
+            # Interrupted — nobody needs the half-written reply.
             self._parts, self._collecting = [], False
             await self.push_frame(frame, direction)
         else:
             await self.push_frame(frame, direction)
+
+
+if __name__ == "__main__":
+    f = SpeechTextFilter()
+    samples = [
+        'Recording.<break time="0.4s" /> Three nights.<break time="2s" /> Your phone:'
+        '<break time="0.3s" /> oh six seven<break time="0.3s" /> one two three.',
+        "No markup here, nothing should change.",
+    ]
+    for s in samples:
+        print("\nIN :", s)
+        print("OUT:", f.prepare(s))
