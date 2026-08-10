@@ -234,6 +234,18 @@ class Business:
     tz: str  # the timezone of the BUSINESS, not of the server
     booking: BookingConfig
 
+    @property
+    def pack(self):
+        """This business's own language pack.
+
+        Public and used everywhere rather than the module-level L: the prompt
+        builders take a `biz` argument, and honouring the language of the
+        process instead of the language of that business produced a Ukrainian
+        prompt wrapped around an English config — which is exactly what
+        `python business.py dental_us` used to print.
+        """
+        return load_locale(self.language)
+
     def now(self) -> datetime:
         """Now, by the clock of the business.
 
@@ -315,11 +327,6 @@ def _resources(raw: list[dict] | None) -> tuple[Resource, ...]:
     return tuple(out)
 
 
-def _country_default(language: str) -> str:
-    """The country a language pack assumes when a business does not say."""
-    return load_locale(language).text("settings.default_country")
-
-
 def load_business(key: str | None = None) -> Business:
     """Read a business YAML. key=None → BUSINESS_CONFIG / BUSINESS / 'hotel'."""
     path_env = _CLI_CONFIG or os.getenv("BUSINESS_CONFIG")
@@ -335,23 +342,29 @@ def load_business(key: str | None = None) -> Business:
     d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     b = d.get("booking") or {}
     cust = d.get("customer") or {}
+    # Defaults come from the language, not from this file. A config that omits
+    # `unit:` must inherit its own language's word for it, not Ukrainian.
+    lang = d.get("language") or DEFAULT_LANGUAGE
+    pack = load_locale(lang)
+    dflt = pack.raw("defaults.booking")
+    biz_dflt = pack.raw("defaults.business")
     booking = BookingConfig(
-        language=d.get("language") or DEFAULT_LANGUAGE,
+        language=lang,
         enabled=bool(b.get("enabled", True)),
         granularity=b.get("granularity", "nights"),
-        action=b.get("action", "бронювання"),
+        action=b.get("action", dflt["action"]),
         action_gen=b.get("action_gen") or b.get("action", "бронювання"),
-        verb=b.get("verb", "забронювати"),
+        verb=b.get("verb", dflt["verb"]),
         resource_param=b.get("resource_param", "resource"),
-        resource_label=b.get("resource_label", "варіант"),
-        unit=b.get("unit", "ніч"),
-        start_label=b.get("start_label", "дата початку"),
-        end_label=b.get("end_label", "дата завершення"),
+        resource_label=b.get("resource_label", dflt["resource_label"]),
+        unit=b.get("unit", dflt["unit"]),
+        start_label=b.get("start_label", dflt["start_label"]),
+        end_label=b.get("end_label", dflt["end_label"]),
         ask_party=bool(b.get("ask_party", False)),
         party_param=b.get("party_param", "party_size"),
-        party_label=b.get("party_label", "кількість людей"),
+        party_label=b.get("party_label", dflt["party_label"]),
         max_party=int(b.get("max_party", 10)),
-        ref_prefix=b.get("ref_prefix", "БР-"),
+        ref_prefix=b.get("ref_prefix", dflt["ref_prefix"]),
         slot_step_min=int(b.get("slot_step_min", 30)),
         horizon_days=int(b.get("horizon_days", 365)),
         hours={k: b.get("hours", {}).get(k) for k in WEEKDAYS} if b.get("hours") else {},
@@ -366,35 +379,42 @@ def load_business(key: str | None = None) -> Business:
             for f in (b.get("intake") or [])
         ),
     )
+    # A unit the pack has no forms for degrades silently into "2 ніч" being read
+    # out loud, so it is refused here instead.
+    if booking.granularity == "nights" and booking.unit not in pack.raw("numbers.units"):
+        raise ValueError(
+            f"{path.name}: booking.unit {booking.unit!r} has no plural forms in the "
+            f"{lang!r} language pack. Available: {sorted(pack.raw('numbers.units'))}"
+        )
     return Business(
         key=d.get("key") or path.stem,
         name=d["name"],
         brand=d.get("brand") or d["name"],
         city=d.get("city", ""),
-        agent_name=d.get("agent_name", "Оксана"),
-        persona=d.get("persona", "адміністратор"),
-        tone=d.get("tone", "Будь доброзичливою, але по суті."),
-        currency=d.get("currency", "грн"),
+        agent_name=d.get("agent_name", biz_dflt["agent_name"]),
+        persona=d.get("persona", biz_dflt["persona"]),
+        tone=d.get("tone", biz_dflt["tone"]),
+        currency=d.get("currency", biz_dflt["currency"]),
         customer=(
-            cust.get("nom", "гість"),
-            cust.get("gen", "гостя"),
-            cust.get("dat", "гостю"),
+            cust.get("nom", biz_dflt["customer"]["nom"]),
+            cust.get("gen", biz_dflt["customer"]["gen"]),
+            cust.get("dat", biz_dflt["customer"]["dat"]),
         ),
         knowledge=(d.get("knowledge") or "").strip(),
         speech_bad=(d.get("speech") or {}).get("bad", "").strip(),
         speech_good=(d.get("speech") or {}).get("good", "").strip(),
         speech_recap=(d.get("speech") or {}).get("recap", "").strip(),
-        escalation_examples=d.get("escalation_examples", "питання поза записом"),
+        escalation_examples=d.get("escalation_examples", biz_dflt["escalation_examples"]),
         keyterms=tuple(d.get("keyterms") or ()),
         demo_tab=((d.get("demo") or {}).get("tab") or d.get("key") or "").strip(),
         demo_intro=((d.get("demo") or {}).get("intro") or "").strip(),
         demo_try=tuple((d.get("demo") or {}).get("try") or ()),
-        language=d.get("language") or DEFAULT_LANGUAGE,
+        language=lang,
         # Falls back to the language pack's default: a Ukrainian-speaking
         # business is almost certainly in Ukraine, and a config that forgets the
         # field should still parse phone numbers correctly.
-        country=d.get("country") or _country_default(d.get("language") or DEFAULT_LANGUAGE),
-        tz=d.get("tz") or "Europe/Kyiv",
+        country=d.get("country") or pack.text("settings.default_country"),
+        tz=d.get("tz") or pack.text("settings.default_tz"),
         booking=booking,
     )
 
@@ -421,7 +441,7 @@ def _speech_rules(biz: Business) -> str:
     """How to talk. This is the strongest lever on sounding natural — stronger
     than any TTS setting, because the synthesiser voices punctuation, not
     meaning."""
-    return L.text(
+    return biz.pack.text(
         "prompt.speech_rules",
         speech_bad=biz.speech_bad,
         speech_good=biz.speech_good,
@@ -432,7 +452,7 @@ def _speech_rules(biz: Business) -> str:
 
 def _phone_rules(biz: Business) -> str:
     """How to read a phone number out loud — the same for every industry."""
-    return L.text("prompt.phone_rules", customer_nom=biz.customer_nom)
+    return biz.pack.text("prompt.phone_rules", customer_nom=biz.customer_nom)
 
 
 def _intake_rules(biz: Business) -> str:
@@ -443,12 +463,14 @@ def _intake_rules(biz: Business) -> str:
     lines = "\n".join(
         "   - {}{}{}".format(
             f.label,
-            L.text("prompt.intake.item_required" if f.required else "prompt.intake.item_optional"),
+            biz.pack.text(
+                "prompt.intake.item_required" if f.required else "prompt.intake.item_optional"
+            ),
             f" — {f.description}" if f.description else "",
         )
         for f in fields
     )
-    return L.text("prompt.intake.header") + lines + L.text("prompt.intake.footer")
+    return biz.pack.text("prompt.intake.header") + lines + biz.pack.text("prompt.intake.footer")
 
 
 def _booking_flow(biz: Business) -> str:
@@ -458,18 +480,18 @@ def _booking_flow(biz: Business) -> str:
     bk = biz.booking
 
     if bk.is_slots:
-        collect = L.text(
+        collect = biz.pack.text(
             "prompt.booking.collect_slots",
             resource_label=bk.resource_label,
             customer_nom=biz.customer_nom,
         )
     else:
-        collect = L.text(
+        collect = biz.pack.text(
             "prompt.booking.collect_nights",
             start_label=bk.start_label,
             end_label=bk.end_label,
             resource_label=bk.resource_label,
-            party=L.text("prompt.booking.party_suffix", party_label=bk.party_label)
+            party=biz.pack.text("prompt.booking.party_suffix", party_label=bk.party_label)
             if bk.ask_party
             else "",
             customer_nom=biz.customer_nom,
@@ -477,11 +499,11 @@ def _booking_flow(biz: Business) -> str:
             unit_cap=bk.unit.capitalize(),
         )
 
-    recap = biz.speech_recap or L.text(
+    recap = biz.speech_recap or biz.pack.text(
         "prompt.booking.recap_fallback", resource_label=bk.resource_label
     )
 
-    return L.text(
+    return biz.pack.text(
         "prompt.booking.body",
         action_upper=bk.action.upper(),
         collect=collect,
@@ -499,28 +521,31 @@ def build_system_prompt(biz: Business | None = None) -> str:
     bk = biz.booking
 
     blocks = [
-        L.text("prompt.identity", agent_name=biz.agent_name, persona=biz.persona, name=biz.name),
+        biz.pack.text("prompt.identity", agent_name=biz.agent_name, persona=biz.persona, name=biz.name),
         _speech_rules(biz),
         # The time, not only the date: without it the model does not know what
         # "now" or "in an hour" mean — and for an emergency service that is the
         # main kind of request.
-        L.text(
+        biz.pack.text(
             "prompt.date_hint",
             today=now.date().isoformat(),
-            weekday=WEEKDAY_NAMES[now.weekday()],
-            time=now.strftime("%H:%M"),
+            weekday=biz.pack.raw("calendar.weekdays")[now.weekday()],
+            # Through the pack, not strftime: the whole point of a 12-hour
+            # setting is that the model is not told "it's 14:30 right now" and
+            # then asked to say times the way people do.
+            time=biz.pack.time(now),
             customer_nom=biz.customer_nom,
-            slots_suffix=L.text("prompt.date_hint_slots_suffix") if bk.is_slots else "",
+            slots_suffix=biz.pack.text("prompt.date_hint_slots_suffix") if bk.is_slots else "",
         ),
-        L.text("prompt.about", knowledge=biz.knowledge),
+        biz.pack.text("prompt.about", knowledge=biz.knowledge),
     ]
     if bk.enabled:
         blocks.append(_booking_flow(biz))
 
     blocks.append(
-        L.text(
+        biz.pack.text(
             "prompt.escalation",
-            scope=bk.action_gen if bk.enabled else L.text("prompt.escalation_scope_fallback"),
+            scope=bk.action_gen if bk.enabled else biz.pack.text("prompt.escalation_scope_fallback"),
             escalation_examples=biz.escalation_examples,
         )
     )
@@ -530,7 +555,7 @@ def build_system_prompt(biz: Business | None = None) -> str:
 def greeting_hint(biz: Business | None = None) -> str:
     """A hint for the model's first line — the agent greets, not the caller."""
     biz = biz or BUSINESS
-    return L.text("prompt.greeting_hint", persona=biz.persona, name=biz.name)
+    return biz.pack.text("prompt.greeting_hint", persona=biz.persona, name=biz.name)
 
 
 def slot_grid(day: date, biz: Business | None = None) -> list[datetime]:

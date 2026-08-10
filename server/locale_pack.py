@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from string import Formatter
 
 import yaml
 
@@ -37,7 +38,12 @@ DEFAULT_LANGUAGE = "uk"
 #: filling in exactly this list and nothing else.
 REQUIRED_KEYS = (
     "settings.default_country",
+    "settings.default_tz",
     "settings.time_format",
+    # BCP-47 tags handed to the speech services. Without these the text layer
+    # speaks one language while the microphone and the voice speak another.
+    "settings.speech_language",
+    "settings.default_voice_id",
     "calendar.weekdays",
     "calendar.weekdays_short",
     "calendar.closed",
@@ -94,6 +100,27 @@ REQUIRED_KEYS = (
     "errors.message_no_topic",
     "errors.tool_unknown",
     "notes.message_recorded",
+    "notes.call_time_limit",
+    "ui.duration_min",
+    "ui.per_unit",
+    "spoken.datetime",
+    # Defaults for business-config fields. They belong to the language: a config
+    # that omits `unit:` must not inherit another language's word for it.
+    "defaults.booking.action",
+    "defaults.booking.action_gen",
+    "defaults.booking.verb",
+    "defaults.booking.resource_label",
+    "defaults.booking.unit",
+    "defaults.booking.start_label",
+    "defaults.booking.end_label",
+    "defaults.booking.party_label",
+    "defaults.booking.ref_prefix",
+    "defaults.business.agent_name",
+    "defaults.business.persona",
+    "defaults.business.tone",
+    "defaults.business.currency",
+    "defaults.business.customer",
+    "defaults.business.escalation_examples",
     "tools.phone_arg",
     "tools.date_arg",
     "tools.time_arg",
@@ -130,6 +157,29 @@ class Locale:
             node = node[part]
         return node
 
+    def broken_templates(self) -> list[str]:
+        """Templates that `str.format` cannot even parse.
+
+        A stray brace — an example containing JSON, a smiley — is invisible to a
+        key-completeness check and raises only on the call that renders that one
+        string, which might be the booking confirmation. Cheap to catch on load.
+        """
+        bad = []
+        for key in REQUIRED_KEYS:
+            try:
+                value = self.raw(key)
+            except MissingLocaleKey:
+                continue
+            if not isinstance(value, str):
+                continue
+            try:
+                fields = [f for _, f, _, _ in Formatter().parse(value) if f is not None]
+            except ValueError as e:
+                bad.append(f"{key}: {e}")
+                continue
+            bad += [f"{key}: {{{f}}} is not a name" for f in fields if not f.isidentifier()]
+        return bad
+
     def missing_keys(self) -> list[str]:
         """Which of REQUIRED_KEYS this pack does not define."""
         out = []
@@ -149,10 +199,17 @@ class Locale:
         product away as translated.
         """
         if isinstance(value, str):
-            hour, _, minute = value.partition(":")
-            hour, minute = int(hour), int(minute or 0)
+            try:
+                hour_s, _, minute_s = value.partition(":")
+                hour, minute = int(hour_s), int(minute_s or 0)
+            except ValueError as e:
+                raise ValueError(f"{self.lang}: cannot read a time from {value!r}") from e
         else:
             hour, minute = value.hour, value.minute
+        if not (0 <= hour < 24 and 0 <= minute < 60):
+            # Usually a typo in a business config's `hours:` — which would
+            # otherwise take down the demo card and the "we are closed" message.
+            raise ValueError(f"{self.lang}: {value!r} is not a valid time of day")
         if self.raw("settings.time_format") == "12h":
             suffix = "AM" if hour < 12 else "PM"
             h12 = hour % 12 or 12
@@ -177,15 +234,32 @@ class Locale:
             # confirmation could be read out with "{now}" in it instead of
             # raising. Caught by tests/test_locale.py.
             return value.format(**kwargs)
-        except KeyError as e:
+        except (KeyError, IndexError, ValueError) as e:
+            # KeyError  — an argument the caller did not pass.
+            # IndexError — a positional {} or {0} in the pack.
+            # ValueError — a stray brace, e.g. someone put JSON in an example.
+            # All three used to surface differently; only the first was caught,
+            # so a malformed pack failed with a bare ValueError mid-call.
             raise MissingLocaleKey(
-                f"{self.lang}: template {key!r} wants {e} which was not passed"
+                f"{self.lang}: cannot render template {key!r} — {type(e).__name__}: {e}"
             ) from e
 
 
-@lru_cache(maxsize=None)
 def load_locale(lang: str | None = None) -> Locale:
-    lang = lang or DEFAULT_LANGUAGE
+    """Load a pack, cached per process.
+
+    The default is resolved before the cache, not inside it: `lru_cache`
+    distinguishes `f()` from `f(None)` from `f("uk")`, so caching the raw
+    argument gave three separate objects for one language.
+
+    The file is read once per process — editing a YAML under a running bot has
+    no effect until it restarts.
+    """
+    return _load_locale(lang or DEFAULT_LANGUAGE)
+
+
+@lru_cache(maxsize=None)
+def _load_locale(lang: str) -> Locale:
     path = LOCALES_DIR / f"{lang}.yaml"
     if not path.exists():
         available = sorted(p.stem for p in LOCALES_DIR.glob("*.yaml"))
@@ -195,5 +269,10 @@ def load_locale(lang: str | None = None) -> Locale:
     if missing:
         raise MissingLocaleKey(
             f"language pack {lang!r} is incomplete, missing: " + ", ".join(missing)
+        )
+    broken = pack.broken_templates()
+    if broken:
+        raise MissingLocaleKey(
+            f"language pack {lang!r} has unusable templates: " + "; ".join(broken)
         )
     return pack

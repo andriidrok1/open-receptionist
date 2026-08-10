@@ -36,7 +36,7 @@ import aiohttp
 
 import agent_tools
 import crm
-from business import BUSINESS, build_system_prompt, greeting_hint
+from business import BUSINESS, L, build_system_prompt, greeting_hint
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.frames.frames import (
@@ -162,11 +162,21 @@ class MuteSTTWhileBotSpeaks(FrameProcessor):
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     """Run the voice bot for this session."""
     aiohttp_session = aiohttp.ClientSession()
-    logger.info(f"Starting voice receptionist — {BUSINESS.key}: {BUSINESS.name}")
+    logger.info(
+        f"Starting voice receptionist — {BUSINESS.key}: {BUSINESS.name} "
+        f"[{BUSINESS.language}/{BUSINESS.country}, {BUSINESS.tz}]"
+    )
     crm.init_db()
 
     api_key = os.getenv("OPENAI_API_KEY")
     elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
+
+    # The language the microphone and the voice work in. It has to come from the
+    # same place as the prompt: getting the text layer multilingual while the
+    # speech layer stayed hard-coded meant an English business could not take a
+    # call at all — the model would answer in English while recognition and the
+    # voice were still set to Ukrainian.
+    speech_language = Language(L.text("settings.speech_language"))
 
     # --- Speech-to-Text: provider switch via STT_PROVIDER ---
     # "elevenlabs" (default): Scribe v2 Realtime. It does NOT detect speech on
@@ -183,7 +193,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             commit_strategy=CommitStrategy.MANUAL,  # committed by the local Silero VAD
             settings=ElevenLabsRealtimeSTTService.Settings(
                 model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime"),
-                language=Language.UK,
+                language=speech_language,
                 # Keyterms improve accuracy on domain words (service names and
                 # the like). They come from the business config, because every
                 # industry has its own.
@@ -255,7 +265,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             },
             settings=OpenAIRealtimeSTTService.Settings(
                 model=os.getenv("OPENAI_STT_MODEL", "gpt-4o-transcribe"),
-                language=Language.UK,
+                language=speech_language,
                 noise_reduction=os.getenv("OPENAI_STT_NOISE", "near_field"),
             ),
         )
@@ -276,9 +286,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     if elevenlabs_key:
         voice_settings = dict(
-            voice=os.getenv("ELEVENLABS_VOICE_ID", "bsourKGZEagmttzrIzmu"),
+            # A voice is ultimately a business's choice, but the default has to
+            # at least be native to the language — an English voice reading
+            # Ukrainian guesses its way through every stressed syllable.
+            voice=os.getenv("ELEVENLABS_VOICE_ID") or L.text("settings.default_voice_id"),
             model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
-            language=Language.UK,
+            language=speech_language,
             speed=float(os.getenv("ELEVENLABS_SPEED", "0.95")),
             stability=float(os.getenv("ELEVENLABS_STABILITY", "0.4")),
             style=float(os.getenv("ELEVENLABS_STYLE", "1.0")),
@@ -444,9 +457,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # EndFrame rather than cancel(): cancel kills the audio task without
             # draining the buffer, so the bot is cut off mid-word and it sounds
             # like a dropped connection. EndFrame lets it finish saying goodbye.
-            # TODO(locale): this line belongs in the language pack.
             await worker.queue_frames([
-                TTSSpeakFrame("Вибачте, демо-дзвінок обмежений у часі. Гарного дня!"),
+                TTSSpeakFrame(L.text("notes.call_time_limit")),
                 EndFrame(),
             ])
 

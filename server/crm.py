@@ -289,7 +289,7 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
     # "that time has already passed" in answer to a request to come immediately
     # — on a call where water is running down a wall.
     if begin < BIZ.now() - timedelta(minutes=GRACE_MIN):
-        return "", "", _err("slot.in_past", now=BIZ.now().strftime("%Y-%m-%d %H:%M"))
+        return "", "", _err("slot.in_past", now=_spoken_now())
     if (begin.date() - BIZ.today()).days > BOOK.horizon_days:
         return "", "", _err("slot.beyond_horizon", days=BOOK.horizon_days)
 
@@ -339,7 +339,11 @@ def free_slots(
                 free.append(begin)
     if near:
         free.sort(key=lambda t: abs((t - near).total_seconds()))
-    return [L.time(t) for t in sorted(free[:limit])]
+    # Machine format on purpose: these go straight back into check_availability,
+    # whose argument is documented as 24-hour HH:MM. Handing the model "1 PM"
+    # and asking it to convert is how "01:00" happens mid-call. The spoken form
+    # is added alongside by check_availability.
+    return [t.strftime("%H:%M") for t in sorted(free[:limit])]
 
 
 # ------------------------------ availability ------------------------------
@@ -367,6 +371,18 @@ def _plural(n: int, unit: str) -> str:
     if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
         return forms[1]
     return forms[2]
+
+
+def _spoken_now() -> str:
+    """The current moment, said the way this language says it.
+
+    The prompt instructs the agent to read an error out loud verbatim, so an ISO
+    date and a 24-hour clock inside one would be read to an American caller as
+    "two thousand twenty six dash zero eight dash ten, fourteen thirty".
+    """
+    now = BIZ.now()
+    date_part = L.text("spoken.date", day=now.day, month=_MONTHS[now.month - 1])
+    return L.text("spoken.datetime", date=date_part, time=L.time(now))
 
 
 def _spoken(label: str, starts_at: str, ends_at: str, units: int, price: int) -> str:
@@ -466,6 +482,7 @@ def check_availability(
                 nxt = day + timedelta(days=ahead)
                 out["alternatives"] = free_slots(key, nxt)
                 out["alternatives_day"] = nxt.isoformat()
+            out["alternatives_spoken"] = [L.time(t) for t in out["alternatives"]]
     else:
         out["units"] = units
         out["unit_label"] = BOOK.unit

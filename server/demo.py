@@ -45,20 +45,21 @@ def demo_db(key: str) -> Path:
 
 
 def _resource_rows(biz) -> list[dict]:
+    """Price rows for the card, labelled in the business's own language.
+
+    The showcase holds several businesses in different languages at once, so
+    these come from `biz.pack` rather than from the process-wide one — an
+    English practice showing "30 хв" is the first thing a visitor sees.
+    """
     out = []
     for r in biz.booking.resources:
-        out.append(
-            {
-                "label": r.label,
-                "price": r.price,
-                # TODO(locale): shown on the demo card, needs the language pack.
-                "note": r.note or (
-                    f"{r.duration_min} хв"
-                    if biz.booking.is_slots and r.duration_min
-                    else f"за {biz.booking.unit}"
-                ),
-            }
-        )
+        if r.note:
+            note = r.note
+        elif biz.booking.is_slots and r.duration_min:
+            note = biz.pack.text("ui.duration_min", n=r.duration_min)
+        else:
+            note = biz.pack.text("ui.per_unit", unit=biz.booking.unit)
+        out.append({"label": r.label, "price": r.price, "note": note})
     return out
 
 

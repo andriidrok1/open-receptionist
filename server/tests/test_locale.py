@@ -38,16 +38,36 @@ def test_pack_is_complete(lang):
     assert load_locale(lang).missing_keys() == []
 
 
-@pytest.mark.parametrize("lang", ALL_LANGUAGES)
-def test_no_placeholder_is_left_unfilled(lang):
-    """Every `{placeholder}` in the pack is one the code actually passes.
+REFERENCE = "uk"  # the pack the code was written against
 
-    A typo in a placeholder name does not fail on load — it fails on the call
-    that renders that template, which might be the booking confirmation.
-    """
+
+def _placeholders(pack, key) -> set:
     import re
 
-    pack = load_locale(lang)
+    value = pack.raw(key)
+    return set(re.findall(r"\{(\w+)\}", value)) if isinstance(value, str) else set()
+
+
+@pytest.mark.parametrize("lang", [x for x in ALL_LANGUAGES if x != REFERENCE])
+def test_placeholders_match_the_reference_pack(lang):
+    """Every pack must use exactly the placeholders the reference one uses.
+
+    A flat "is this name known anywhere in the project" check is not enough: a
+    pack could put {price} into an error the code renders with no arguments at
+    all, and that only fails on the call where that error fires. Comparing per
+    key against the reference catches both directions — a placeholder the code
+    will not pass, and one the pack forgot to use.
+    """
+    ref, pack = load_locale(REFERENCE), load_locale(lang)
+    wrong = {
+        key: (_placeholders(ref, key), _placeholders(pack, key))
+        for key in REQUIRED_KEYS
+        if _placeholders(ref, key) != _placeholders(pack, key)
+    }
+    assert not wrong, f"{lang}: placeholders differ from {REFERENCE} — {wrong}"
+
+
+def test_reference_pack_uses_only_names_the_code_passes(lang=REFERENCE):
     known = {
         "agent_name", "persona", "name", "speech_bad", "speech_good", "tone",
         "customer_gen", "customer_nom", "customer_nom_cap", "customer_dat",
@@ -56,18 +76,24 @@ def test_no_placeholder_is_left_unfilled(lang):
         "party", "party_label", "unit_cap", "action_upper", "collect",
         "intake_rules", "phone_rules", "recap", "count", "unit", "max", "days",
         "now", "hours", "opens", "closes", "duration", "resource", "known",
-        "fields", "name", "price", "currency", "day", "month", "label", "date",
-        "start", "end", "units", "money", "action", "topic",
+        "fields", "price", "currency", "day", "month", "label", "date",
+        "start", "end", "units", "money", "action", "topic", "n",
     }
-    unknown = {}
-    for key in REQUIRED_KEYS:
-        value = pack.raw(key)
-        if not isinstance(value, str):
-            continue
-        for found in re.findall(r"\{(\w+)\}", value):
-            if found not in known:
-                unknown.setdefault(key, set()).add(found)
+    pack = load_locale(lang)
+    unknown = {k: _placeholders(pack, k) - known for k in REQUIRED_KEYS
+               if _placeholders(pack, k) - known}
     assert not unknown, f"{lang}: unknown placeholders {unknown}"
+
+
+@pytest.mark.parametrize("lang", ALL_LANGUAGES)
+def test_templates_are_parseable(lang):
+    """A stray brace in a pack is invisible until the call that renders it."""
+    assert load_locale(lang).broken_templates() == []
+
+
+def test_a_stray_brace_is_caught_on_load():
+    pack = Locale("t", {"prompt": {"identity": "hello {"}})
+    assert any("identity" in b for b in pack.broken_templates())
 
 
 def test_incomplete_pack_is_rejected_loudly():

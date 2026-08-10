@@ -23,6 +23,13 @@ settings:
   # in California is exactly the kind of small wrongness that gives away a
   # product that was built for somewhere else.
   time_format: 12h
+  # Default timezone when a business config does not name its own.
+  default_tz: America/Los_Angeles
+  # BCP-47 tag handed to speech recognition and synthesis.
+  speech_language: en
+  # Default voice. Rachel, a premade ElevenLabs voice — a placeholder until one
+  # is chosen by ear the way the Ukrainian one was (see voice_lab.py).
+  default_voice_id: 21m00Tcm4TlvDq8ikWAM
 
 calendar:
   weekdays: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
@@ -43,6 +50,7 @@ spoken:
   # The currency symbol goes before the amount in English.
   money: "{currency}{price}"
   date: "{month} {day}"
+  datetime: "{date} at {time}"
   slot: "{label}, {date} at {time}, {money}"
   nights: "{label}, check in {start}, check out {end}, {units} {unit} — {money}"
 
@@ -282,3 +290,32 @@ errors:
 
 notes:
   message_recorded: the request is recorded, someone will get in touch
+  # What the bot says when a demo call runs into its time limit.
+  call_time_limit: Sorry, this demo call is time-limited. Have a good one!
+
+# Labels on the demo showcase (read by a human, not by the model).
+ui:
+  duration_min: "{n} min"
+  per_unit: "per {unit}"
+
+# Defaults for business-config fields an author may leave out. These used to be
+# hard-coded in Python as Ukrainian words, so an English config that forgot
+# `unit:` would read "2 ніч" to an American caller.
+defaults:
+  booking:
+    action: appointment
+    action_gen: appointments
+    verb: book
+    resource_label: service
+    unit: night
+    start_label: check-in date
+    end_label: check-out date
+    party_label: number of people
+    ref_prefix: "BK-"
+  business:
+    agent_name: Alex
+    persona: receptionist
+    tone: Be friendly but brief.
+    currency: "$"
+    customer: {nom: customer, gen: customer, dat: customer}
+    escalation_examples: anything outside booking
