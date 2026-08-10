@@ -18,6 +18,10 @@ from business import BUSINESS, L
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
+import sqlite3
+
+from loguru import logger as _logger
+
 import crm
 
 BIZ = BUSINESS
@@ -153,7 +157,22 @@ def _party(args: dict) -> int:
 
 
 def call_tool(name: str, args: dict) -> dict:
-    """Execute a tool. Synchronous — both the bot and the evaluation come here."""
+    """Execute a tool. Synchronous — both the bot and the evaluation come here.
+
+    Storage failures are turned into an ordinary tool error rather than allowed
+    to escape. An exception here never reaches result_callback, so the model is
+    left holding a tool call with no result and the caller hears silence — the
+    event log already swallows its own errors for exactly this reason, and the
+    booking path had no such guard.
+    """
+    try:
+        return _call_tool(name, args)
+    except sqlite3.Error as e:
+        _logger.error(f"[tool] {name} failed against the store: {e}")
+        return {"error": L.text("errors.storage_unavailable")}
+
+
+def _call_tool(name: str, args: dict) -> dict:
     if name == "check_availability":
         start, end = _when(args)
         return crm.check_availability(

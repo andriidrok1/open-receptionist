@@ -14,6 +14,8 @@ own, which is one more thing the language pack should carry.
 
 import argparse
 import random
+
+import phonenumbers
 import sqlite3
 import uuid
 from datetime import date, datetime, timedelta
@@ -41,14 +43,26 @@ BOOK = BUSINESS.booking
 WEIGHTS = [0.40, 0.32, 0.20, 0.08, 0.05, 0.03][: len(BOOK.resources)]
 
 
-def _phone() -> str:
-    """A plausible number in the store's canonical form.
+_EXAMPLE_NUMBER = phonenumbers.example_number_for_type(
+    BUSINESS.country, phonenumbers.PhoneNumberType.MOBILE
+) or phonenumbers.example_number(BUSINESS.country)
 
-    Run through the same validation the agent's input goes through, so seeded
-    rows and real ones look identical on the dashboard.
+
+def _phone() -> str:
+    """A plausible, valid number for the business's own country.
+
+    It used to build a Ukrainian number unconditionally and fall back to the raw
+    string when validation failed — which, before numbers were parsed per
+    country, could never happen. Once it could, seeding an American practice
+    filled its dashboard with numbers its own agent would reject.
     """
-    raw = f"0{random.choice((50, 63, 66, 67, 68, 93, 95, 96, 97, 98, 99))}{random.randint(1000000, 9999999)}"
-    return crm.validate_phone(raw)[0] or raw
+    base = phonenumbers.national_significant_number(_EXAMPLE_NUMBER)
+    for _ in range(200):
+        candidate = base[:-6] + f"{random.randint(0, 999999):06d}"
+        value, _error = crm.validate_phone(candidate)
+        if value:
+            return value
+    raise RuntimeError(f"cannot generate a valid {BUSINESS.country} number from {base}")
 
 
 def _slot_span(created: datetime) -> tuple[str, str, int] | None:

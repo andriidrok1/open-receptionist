@@ -79,6 +79,8 @@ REQUIRED_KEYS = (
     "errors.phone.too_short",
     "errors.phone.too_long",
     "errors.phone.invalid",
+    "errors.phone.wrong_digits",
+    "errors.storage_unavailable",
     "errors.name.missing",
     "errors.name.empty",
     "errors.name.placeholder",
@@ -146,12 +148,18 @@ class Locale:
         self.lang = lang
         self._data = data
 
-    def raw(self, key: str, default=None):
-        """The value as it is in the YAML: a string, a list or a mapping."""
+    _MISSING = object()
+
+    def raw(self, key: str, default=_MISSING):
+        """The value as it is in the YAML: a string, a list or a mapping.
+
+        A sentinel rather than None, so that a falsy default ([], "", 0) is
+        honoured instead of raising — the old check was `if default is not None`.
+        """
         node = self._data
         for part in key.split("."):
             if not isinstance(node, dict) or part not in node:
-                if default is not None:
+                if default is not Locale._MISSING:
                     return default
                 raise MissingLocaleKey(f"{self.lang}: no key {key!r} in the language pack")
             node = node[part]

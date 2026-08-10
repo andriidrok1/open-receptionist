@@ -217,7 +217,12 @@ def check_no_fabricated_data(run) -> list[str]:
         if name not in ("create_booking", "take_message") or not res.get("success"):
             continue
         phone = _digits(args.get("phone"))
-        if phone and phone not in said_digits and phone[1:] not in said_digits:
+        # Compare on the national part: the tool stores E.164, the caller says
+        # a local number. Slicing one digit off only worked for a one-digit
+        # country code (+1) and would have produced a false "never given" for
+        # +380.
+        national = phone[-9:] if len(phone) > 9 else phone
+        if phone and phone not in said_digits and national not in said_digits:
             bad.append(f"{name}: phone {phone} was never given by the caller")
         for field in [f.key for f in BOOK.intake] + ["customer_name"]:
             val = (args.get(field) or "").strip()

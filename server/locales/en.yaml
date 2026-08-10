@@ -254,6 +254,9 @@ errors:
     invalid: >-
       that isn't a real phone number — ask for it again and read it back in
       groups of digits
+    wrong_digits: >-
+      that number has {count} digits but no such number exists — one of them
+      was probably misheard; ask again and read it back in groups
   name:
     missing: no name was given
     empty: that name looks empty — ask what to call them
@@ -287,6 +290,11 @@ errors:
   no_space: there's nothing free at that time
   message_no_topic: the question itself wasn't given
   tool_unknown: unknown tool {name}
+  # The store is unreachable. Not the caller's fault, and repeating the question
+  # will not help.
+  storage_unavailable: >-
+    the booking system is unavailable right now — apologise, take a name and
+    number with take_message and say someone will call back
 
 notes:
   message_recorded: the request is recorded, someone will get in touch

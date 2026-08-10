@@ -33,6 +33,8 @@ from phonenumbers import NumberParseException, PhoneNumberFormat, ValidationResu
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from zoneinfo import ZoneInfo
+
 from business import BUSINESS, L, slot_grid
 
 BIZ = BUSINESS
@@ -47,6 +49,21 @@ _ISO_MIN = "%Y-%m-%dT%H:%M"
 GRACE_MIN = 10
 #: Upper bound on the length of a single booking, in units (nights).
 MAX_UNITS = 60
+def _to_business_time(stamp: str) -> str:
+    """A `created_at` from SQLite, moved into the business's timezone.
+
+    SQLite stamps rows with datetime('now'), which is UTC — while everything the
+    business sees is in its own zone. Left alone, the owner's dashboard showed a
+    time offset by their whole UTC offset, and for a Californian practice
+    anything logged after 5pm landed on the next calendar day.
+    """
+    try:
+        utc = datetime.fromisoformat(stamp).replace(tzinfo=ZoneInfo("UTC"))
+    except (ValueError, TypeError):
+        return stamp
+    return utc.astimezone(ZoneInfo(BIZ.tz)).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _err(key: str, **kwargs) -> str:
     """An error message from the language pack.
 
@@ -61,17 +78,6 @@ def _err(key: str, **kwargs) -> str:
 
 
 # ------------------------------- phone -------------------------------
-
-
-def normalize_phone(raw: str | None) -> str | None:
-    """Reduce a phone number to digits (and a leading +): "067 123 45 67" →
-    "0671234567". If there are no digits at all (the LLM passed words), leave it
-    as it is, so the problem stays visible to a human instead of vanishing.
-    """
-    if not raw:
-        return raw
-    digits = re.sub(r"[^\d+]", "", raw)
-    return digits or raw
 
 
 def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
@@ -100,13 +106,23 @@ def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
     except NumberParseException:
         return None, _err("phone.invalid")
 
+    # The class of error matters, because the agent reads it out loud and has to
+    # know what to ask next. Lumping everything into "no such number" was a
+    # regression: a ten-digit mobile with one digit misheard is IS_POSSIBLE but
+    # invalid, and telling the caller their number does not exist starts an
+    # argument instead of a re-ask.
     reason = phonenumbers.is_possible_number_with_reason(number)
-    if reason == ValidationResult.TOO_SHORT:
+    if reason in (
+        ValidationResult.TOO_SHORT,
+        ValidationResult.IS_POSSIBLE_LOCAL_ONLY,  # no area or carrier code
+        ValidationResult.INVALID_LENGTH,
+    ):
         return None, _err("phone.too_short")
     if reason == ValidationResult.TOO_LONG:
         return None, _err("phone.too_long")
     if not phonenumbers.is_valid_number(number):
-        return None, _err("phone.invalid")
+        digits = phonenumbers.national_significant_number(number)
+        return None, _err("phone.wrong_digits", count=len(digits))
 
     return phonenumbers.format_number(number, PhoneNumberFormat.E164), None
 
@@ -149,6 +165,9 @@ def _connect() -> sqlite3.Connection:
     # Writes happen inside a transaction (see create_booking), so a concurrent
     # call should wait rather than fail with "database is locked".
     conn.execute("PRAGMA busy_timeout = 5000")
+    # WAL removes the reader/writer conflict entirely: the showcase polls
+    # /api/activity while the bot is writing a booking into the same file.
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
@@ -679,7 +698,7 @@ def list_bookings() -> list[dict]:
                 "party_size": r["party_size"],
                 "total_price": r["total_price"],
                 "details": json.loads(r["details"]) if r["details"] else {},
-                "created_at": r["created_at"],
+                "created_at": _to_business_time(r["created_at"]),
             }
         )
     return out
@@ -691,7 +710,7 @@ def list_messages() -> list[dict]:
         rows = conn.execute(
             "SELECT * FROM messages ORDER BY created_at DESC, rowid DESC"
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [{**dict(r), "created_at": _to_business_time(r["created_at"])} for r in rows]
 
 
 # ------------------------------ dashboard ------------------------------
