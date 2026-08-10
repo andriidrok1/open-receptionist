@@ -10,12 +10,11 @@ Which tools exist depends on the business:
     granularity=nights    → check_availability(start date, end date, ...);
     granularity=slots     → check_availability(date, time, service).
 
-Note on language: the `description` strings below are read by the model, so they
-stay in the business's language until the locale layer lands. Everything that is
-only read by humans is in English.
+Note on language: every `description` here is read by the model, so the text
+lives in the language pack (locales/<lang>.yaml), not in this file.
 """
 
-from business import BUSINESS
+from business import BUSINESS, L
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
@@ -26,11 +25,7 @@ BOOK = BUSINESS.booking
 
 _OPTIONAL_INTAKE = {f.key for f in BOOK.intake if not f.required}
 
-# TODO(locale): model-facing text.
-PHONE_DESC = (
-    "Номер телефону ВИКЛЮЧНО цифрами, напр. 0671234567. "
-    "Ніколи не передавай словами («нуль шість сім») — тільки цифри."
-)
+PHONE_DESC = L.text("tools.phone_arg")
 
 
 def _resource_prop() -> dict:
@@ -50,17 +45,17 @@ def _when_props() -> dict:
     """Time arguments — different for the two booking models."""
     if BOOK.is_slots:
         return {
-            "date": {"type": "string", "description": "Дата візиту у форматі РРРР-ММ-ДД"},
-            "time": {"type": "string", "description": "Час початку у форматі ГГ:ХХ (24 години)"},
+            "date": {"type": "string", "description": L.text("tools.date_arg")},
+            "time": {"type": "string", "description": L.text("tools.time_arg")},
         }
     return {
         "start_date": {
             "type": "string",
-            "description": f"{BOOK.start_label.capitalize()} у форматі РРРР-ММ-ДД",
+            "description": L.text("tools.start_arg", label=BOOK.start_label.capitalize()),
         },
         "end_date": {
             "type": "string",
-            "description": f"{BOOK.end_label.capitalize()} у форматі РРРР-ММ-ДД",
+            "description": L.text("tools.end_arg", label=BOOK.end_label.capitalize()),
         },
     }
 
@@ -95,9 +90,8 @@ def _intake_props() -> dict:
 CHECK_AVAILABILITY_SCHEMA = FunctionSchema(
     name="check_availability",
     description=(
-        f"Перевірити, чи вільно, і дізнатися вартість. Виклич перед тим, як називати "
-        f"{BIZ.customer_dat} ціну або підтверджувати {BOOK.action}. "
-        + ("Якщо названий час зайнятий — повертає вільні альтернативи." if BOOK.is_slots else "")
+        L.text("tools.check_availability", customer_dat=BIZ.customer_dat, action=BOOK.action)
+        + (L.text("tools.check_availability_slots_suffix") if BOOK.is_slots else "")
     ),
     properties=_booking_props(),
     required=list(_booking_props()),
@@ -106,31 +100,30 @@ CHECK_AVAILABILITY_SCHEMA = FunctionSchema(
 _CREATE_PROPS = {
     **_booking_props(),
     **_intake_props(),
-    "customer_name": {"type": "string", "description": f"Ім'я, як представився {BIZ.customer_nom}"},
+    "customer_name": {
+        "type": "string",
+        "description": L.text("tools.name_arg", customer_nom=BIZ.customer_nom),
+    },
     "phone": {"type": "string", "description": PHONE_DESC},
 }
 
 CREATE_BOOKING_SCHEMA = FunctionSchema(
     name="create_booking",
-    description=(
-        f"Створити {BOOK.action} в системі закладу. Виклич ТІЛЬКИ після того, як ти вголос "
-        f"повторила всі деталі і {BIZ.customer_nom} явно підтвердив («так»)."
-    ),
+    description=L.text("tools.create_booking", action=BOOK.action, customer_nom=BIZ.customer_nom),
     properties=_CREATE_PROPS,
     required=[k for k in _CREATE_PROPS if k not in _OPTIONAL_INTAKE],
 )
 
 TAKE_MESSAGE_SCHEMA = FunctionSchema(
     name="take_message",
-    description=(
-        "Записати запит на зворотний дзвінок від людини. Виклич, коли питання поза "
-        f"межами {BOOK.action} і ти пообіцяла, що передзвонять. "
-        f"Спершу дізнайся ім'я та телефон."
-    ),
+    description=L.text("tools.take_message", action=BOOK.action),
     properties={
-        "customer_name": {"type": "string", "description": f"Ім'я, як представився {BIZ.customer_nom}"},
+        "customer_name": {
+            "type": "string",
+            "description": L.text("tools.name_arg", customer_nom=BIZ.customer_nom),
+        },
         "phone": {"type": "string", "description": PHONE_DESC},
-        "topic": {"type": "string", "description": "Суть питання, одним-двома реченнями"},
+        "topic": {"type": "string", "description": L.text("tools.topic_arg")},
     },
     required=["customer_name", "phone", "topic"],
 )
@@ -182,7 +175,7 @@ def call_tool(name: str, args: dict) -> dict:
         )
     if name == "take_message":
         return crm.take_message(args.get("customer_name"), args.get("phone"), args.get("topic"))
-    return {"error": f"невідомий інструмент {name}"}  # TODO(locale): model-facing
+    return {"error": L.text("errors.tool_unknown", name=name)}
 
 
 def register(llm, logger=None) -> None:

@@ -17,9 +17,9 @@ serves both models.
 The business comes from business.BUSINESS (one process = one business = one
 phone number).
 
-Note on language: strings returned to the caller as `error` are read out loud by
-the model, so they stay in the business's language until the locale layer lands.
-Everything only humans read is in English.
+Note on language: nothing said out loud lives in this file. Error strings,
+month names and unit forms come from the language pack (locale_pack.py), because
+the model reads them to the caller. What stays here is the logic.
 """
 
 import json
@@ -30,7 +30,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from business import BUSINESS, slot_grid
+from business import BUSINESS, L, slot_grid
 
 BIZ = BUSINESS
 BOOK = BUSINESS.booking
@@ -44,6 +44,17 @@ _ISO_MIN = "%Y-%m-%dT%H:%M"
 GRACE_MIN = 10
 #: Upper bound on the length of a single booking, in units (nights).
 MAX_UNITS = 60
+def _err(key: str, **kwargs) -> str:
+    """An error message from the language pack.
+
+    These are not log lines: the model reads them out loud. Keeping them as
+    codes here rather than as prose has three payoffs — they are translated in
+    one place, tests can assert on the code instead of on wording that shifts,
+    and the whole set can be reviewed at a glance in the YAML, which is how the
+    "an error is not the same as no availability" rule gets enforced.
+    """
+    return L.text(f"errors.{key}", **kwargs)
+
 
 
 # ------------------------------- phone -------------------------------
@@ -73,11 +84,11 @@ def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
     — this hand-rolled version only knows one country's numbering plan.
     """
     if not raw:
-        return None, "телефон не вказано"
+        return None, _err("phone.missing")
 
     digits = re.sub(r"\D", "", raw)
     if not digits:
-        return None, "у номері немає жодної цифри — продиктуй цифрами, не словами"
+        return None, _err("phone.no_digits")
 
     if len(digits) == 12 and digits.startswith("380"):
         digits = "0" + digits[3:]
@@ -85,26 +96,17 @@ def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
         digits = "0" + digits[2:]
 
     if len(digits) != 10:
-        return None, (
-            f"у номері {len(digits)} цифр замість десяти — "
-            "перепитай номер і повтори його вголос групами цифр"
-        )
+        return None, _err("phone.wrong_length", count=len(digits))
     if not digits.startswith("0"):
         # A separate branch: otherwise a ten-digit number that does not start
         # with zero made the agent say out loud "that number has ten digits
         # instead of ten".
-        return None, (
-            "український номер починається з нуля — перепитай номер "
-            "і повтори його вголос групами цифр"
-        )
+        return None, _err("phone.bad_prefix")
     return digits, None
 
 
 #: Words the model plugs into the mandatory name field when it never asked.
-_PLACEHOLDER_NAMES = {
-    "гість", "гости", "гостя", "клієнт", "клиент", "пацієнт", "пациент",
-    "guest", "client", "customer", "невідомо", "не вказано", "анонім", "n/a", "-",
-}
+_PLACEHOLDER_NAMES = {w.lower() for w in L.raw("placeholder_names")}
 
 
 def validate_name(raw: str | None) -> tuple[str | None, str | None]:
@@ -118,14 +120,11 @@ def validate_name(raw: str | None) -> tuple[str | None, str | None]:
     """
     name = (raw or "").strip()
     if not name:
-        return None, "не вказано ім'я"
+        return None, _err("name.missing")
     if len(name) < 2 or not re.search(r"[^\W\d_]", name, re.UNICODE):
-        return None, "ім'я виглядає порожнім — спитай, як до людини звертатися"
+        return None, _err("name.empty")
     if name.lower().strip(".,!") in _PLACEHOLDER_NAMES:
-        return None, (
-            f"«{name}» — це не ім'я. Ти не спитала, як до людини звертатися: "
-            "спитай і передай те, що вона назве"
-        )
+        return None, _err("name.placeholder", name=name)
     return name, None
 
 
@@ -249,24 +248,23 @@ def _parse_nights(start: str, end: str) -> tuple[str, str, int, str | None]:
         ci = date.fromisoformat(start)
         co = date.fromisoformat(end)
     except (ValueError, TypeError):
-        return "", "", 0, "неправильний формат дат, очікується РРРР-ММ-ДД"
+        return "", "", 0, _err("nights.bad_format")
     if (co - ci).days <= 0:
-        return "", "", 0, "дата виїзду має бути пізніше за дату заїзду — перепитай дати"
+        return "", "", 0, _err("nights.end_before_start")
     # Without an upper bound, one slip of the tongue in the check-out date turns
     # into a booking of "four hundred nights, four hundred and eighty thousand"
     # — and a room blocked for a year.
     if (co - ci).days > MAX_UNITS:
-        return "", "", 0, (
-            f"{(co - ci).days} {_plural((co - ci).days, BOOK.unit)} — це забагато "
-            f"(максимум {MAX_UNITS}); перепитай дати, схоже, ти неправильно почула"
+        return "", "", 0, _err(
+            "nights.too_long",
+            count=(co - ci).days,
+            unit=_plural((co - ci).days, BOOK.unit),
+            max=MAX_UNITS,
         )
     if ci < BIZ.today():
-        return "", "", 0, (
-            f"ця дата вже минула (сьогодні {BIZ.today().isoformat()}). "
-            "Скажи про це вголос і спитай, на яке число потрібно"
-        )
+        return "", "", 0, _err("nights.in_past", today=BIZ.today().isoformat())
     if (ci - BIZ.today()).days > BOOK.horizon_days:
-        return "", "", 0, f"так далеко наперед не бронюємо (максимум {BOOK.horizon_days} днів)"
+        return "", "", 0, _err("nights.beyond_horizon", days=BOOK.horizon_days)
     return ci.isoformat(), co.isoformat(), (co - ci).days, None
 
 
@@ -276,7 +274,7 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
     try:
         begin = datetime.strptime(raw[:16], _ISO_MIN)
     except (ValueError, TypeError):
-        return "", "", "неправильний формат часу, очікується РРРР-ММ-ДДTГГ:ХХ"
+        return "", "", _err("slot.bad_format")
     finish = begin + timedelta(minutes=duration_min)
 
     # Ten minutes ago is not "in the past", it is "come right now": while the
@@ -285,25 +283,21 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
     # "that time has already passed" in answer to a request to come immediately
     # — on a call where water is running down a wall.
     if begin < BIZ.now() - timedelta(minutes=GRACE_MIN):
-        return "", "", (
-            f"цей час уже минув (зараз {BIZ.now().strftime('%Y-%m-%d %H:%M')}). "
-            "Скажи про це вголос і спитай, на коли потрібно"
-        )
+        return "", "", _err("slot.in_past", now=BIZ.now().strftime("%Y-%m-%d %H:%M"))
     if (begin.date() - BIZ.today()).days > BOOK.horizon_days:
-        return "", "", f"так далеко наперед не записуємо (максимум {BOOK.horizon_days} днів)"
+        return "", "", _err("slot.beyond_horizon", days=BOOK.horizon_days)
 
     hours = BOOK.hours_for(begin.date())
     if not hours:
-        return "", "", f"цього дня заклад не працює; графік: {BOOK.hours_human()}"
+        return "", "", _err("slot.closed_day", hours=BOOK.hours_human())
     open_t, close_t = hours
     if BOOK.is_round_clock(begin.date()):
         return begin.strftime(_ISO_MIN), finish.strftime(_ISO_MIN), None
     if begin.time() < open_t:
-        return "", "", f"цього дня відкриваємось о {open_t.strftime('%H:%M')}"
+        return "", "", _err("slot.before_opening", opens=open_t.strftime("%H:%M"))
     if finish.time() > close_t or finish.date() != begin.date():
-        return "", "", (
-            f"візит триває {duration_min} хв і не встигає до закриття "
-            f"о {close_t.strftime('%H:%M')} — запропонуй раніший час"
+        return "", "", _err(
+            "slot.after_closing", duration=duration_min, closes=close_t.strftime("%H:%M")
         )
     return begin.strftime(_ISO_MIN), finish.strftime(_ISO_MIN), None
 
@@ -344,27 +338,24 @@ def free_slots(
 
 # ------------------------------ availability ------------------------------
 
-# TODO(locale): month names, unit forms and the phrasing in _spoken all move to
-# the language pack.
-_MONTHS_GEN = (
-    "січня", "лютого", "березня", "квітня", "травня", "червня",
-    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
-)
-
-#: Forms of the billing unit: 1 / 2-4 / 5+. The spoken string is read out loud,
-#: so a mis-declined "3 night" will not do.
-_UNIT_FORMS = {
-    "ніч": ("ніч", "ночі", "ночей"),
-    "доба": ("доба", "доби", "діб"),
-    "день": ("день", "дні", "днів"),
-    "година": ("година", "години", "годин"),
-}
+_MONTHS = tuple(L.raw("numbers.months_genitive"))
+#: Forms of the billing unit, in the order the plural rule expects.
+_UNIT_FORMS = {k: tuple(v) for k, v in L.raw("numbers.units").items()}
+_PLURAL_RULE = L.text("numbers.plural_rule")
 
 
 def _plural(n: int, unit: str) -> str:
+    """The right form of the unit for this count.
+
+    The RULE is a property of the language, not of the text, so it comes from
+    the pack too: Slavic languages need three forms (1 / 2-4 / 5+), English gets
+    by with two. A spoken string is read out loud, so "3 night" will not do.
+    """
     forms = _UNIT_FORMS.get(unit)
     if not forms:
         return unit
+    if _PLURAL_RULE == "english":
+        return forms[0] if n == 1 else forms[-1]
     if n % 10 == 1 and n % 100 != 11:
         return forms[0]
     if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
@@ -385,14 +376,21 @@ def _spoken(label: str, starts_at: str, ends_at: str, units: int, price: int) ->
     """
     def dm(iso: str) -> str:
         d = date.fromisoformat(iso[:10])
-        return f"{d.day} {_MONTHS_GEN[d.month - 1]}"
+        return L.text("spoken.date", day=d.day, month=_MONTHS[d.month - 1])
 
-    money = f"{price} {BIZ.currency}"
+    money = L.text("spoken.money", price=price, currency=BIZ.currency)
     if BOOK.is_slots:
-        return f"{label}, {dm(starts_at)} о {starts_at[11:16]}, {money}"
-    return (
-        f"{label}, заїзд {dm(starts_at)}, виїзд {dm(ends_at)}, "
-        f"{units} {_plural(units, BOOK.unit)} — {money}"
+        return L.text(
+            "spoken.slot", label=label, date=dm(starts_at), time=starts_at[11:16], money=money
+        )
+    return L.text(
+        "spoken.nights",
+        label=label,
+        start=dm(starts_at),
+        end=dm(ends_at),
+        units=units,
+        unit=_plural(units, BOOK.unit),
+        money=money,
     )
 
 
@@ -415,7 +413,7 @@ def check_availability(
     key = BOOK.normalize_resource(resource)
     if key is None:
         known = ", ".join(r.label for r in BOOK.resources)
-        return {"error": f"невідомий варіант {resource!r}; є: {known}"}
+        return {"error": _err("resource_unknown", resource=repr(resource), known=known)}
     res = BOOK.resource(key)
 
     if BOOK.is_slots:
@@ -428,7 +426,7 @@ def check_availability(
         return {"error": err}
 
     if BOOK.ask_party and party_size > BOOK.max_party:
-        return {"error": f"максимум {BOOK.max_party} на один запис"}
+        return {"error": _err("party_too_large", max=BOOK.max_party)}
 
     with _connect() as conn:
         left = res.capacity - _occupied(conn, key, starts_at, ends_at)
@@ -511,13 +509,13 @@ def create_booking(
     details = {k: v for k, v in (details or {}).items() if v and str(v).strip()}
     missing = [f.label for f in BOOK.intake if f.required and not details.get(f.key)]
     if missing:
-        return {"success": False, "error": "не вистачає даних: " + ", ".join(missing)}
+        return {"success": False, "error": _err("intake_missing", fields=", ".join(missing))}
 
     avail = check_availability(resource, start, end, party_size)
     if avail.get("error"):
         return {"success": False, "error": avail["error"]}
     if not avail["available"]:
-        out = {"success": False, "error": "на цей час вільного місця немає"}
+        out = {"success": False, "error": _err("no_space")}
         if avail.get("alternatives"):
             out["alternatives"] = avail["alternatives"]
         return out
@@ -535,7 +533,7 @@ def create_booking(
             taken = _occupied(conn, avail["resource"], avail["starts_at"], avail["ends_at"])
             if res.capacity - taken <= 0:
                 conn.execute("ROLLBACK")
-                return {"success": False, "error": "на цей час вільного місця немає"}
+                return {"success": False, "error": _err("no_space")}
             ref_code = _generate_ref_code(conn)
             conn.execute(
                 """
@@ -608,7 +606,7 @@ def take_message(customer_name: str, phone: str, topic: str) -> dict:
     if phone_error:
         return {"success": False, "error": phone_error}
     if not (topic and topic.strip()):
-        return {"success": False, "error": "не вказано суть питання"}
+        return {"success": False, "error": _err("message_no_topic")}
     with _connect() as conn:
         conn.execute(
             "INSERT INTO messages (id, customer_name, phone, topic) VALUES (?, ?, ?, ?)",
@@ -620,7 +618,7 @@ def take_message(customer_name: str, phone: str, topic: str) -> dict:
             ),
         )
         conn.commit()
-    return {"success": True, "note": "запит записано, з людиною зв'яжуться"}
+    return {"success": True, "note": L.text("notes.message_recorded")}
 
 
 # ------------------------------ reading ------------------------------
