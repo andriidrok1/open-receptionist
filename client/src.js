@@ -17,9 +17,19 @@ window.createVoiceClient = function createVoiceClient(baseUrl, handlers) {
       onBotStartedSpeaking: () => handlers.onBotStart?.(),
       onBotStoppedSpeaking: () => handlers.onBotStop?.(),
       onUserTranscript: (d) => d?.final && handlers.onUserText?.(d.text),
-      onBotTranscript: (d) => handlers.onBotText?.(d.text),
+      // onBotOutput, а НЕ onBotTranscript: другий зібраний із потоку LLM і
+      // шлеться лише по межі речення — хвіст без крапки («Консультація 300
+      // грн») не приходить ніколи і випливає приклеєним до наступної репліки.
+      // Сам SDK його вже позначив deprecated.
+      onBotOutput: (d) => handlers.onBotText?.(d.text, d.segment_id),
       onDisconnected: () => handlers.onEnd?.(),
       onError: (e) => handlers.onError?.(e),
+      // Відмова в мікрофоні НЕ ламає connect(): з'єднання підніметься зовсім
+      // без аудіо-треку, сторінка буде малювати «слухаю», а бот не почує
+      // нічого. Без цих двох колбеків такий дзвінок не відрізнити від
+      // справного.
+      onDeviceError: (e) => handlers.onMicError?.(e),
+      onMediaStateChanged: (m) => handlers.onMediaState?.(m),
       // Трек бота віддаємо сторінці — вона сама вирішує, куди його підключити.
       onTrackStarted: (track, participant) => {
         if (!participant?.local && track.kind === "audio") handlers.onBotAudio?.(track);

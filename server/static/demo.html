@@ -247,8 +247,9 @@ function fmtWhen(startsAt, endsAt) {
 
 let CARDS = [], current = null;
 let tickTimer = null;
-let callStartedUtc = null, seconds = 0, liveBubble = null, botBubble = null;
-let seenSegments = new Set(), seenEvents = 0, pollTimer = null;
+let callStartedUtc = null, callKey = null, seconds = 0, liveBubble = null, botBubble = null;
+let seenEvents = 0, pollTimer = null;
+let callOver = true;  // hangUp має спрацювати рівно раз на дзвінок
 let botSpeaking = false, thinkingTimer = null, typingTimer = null, botSegments = [];
 
 const ICON_CALL = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/>';
@@ -267,7 +268,10 @@ function renderTabs() {
   const box = $("tabs"); box.innerHTML = "";
   for (const c of CARDS) {
     const b = el(`<button class="tab" role="tab" aria-selected="${c === current}">${esc(c.tab)}</button>`);
-    b.onclick = () => { if (client) hangUp(); select(c); };
+    // Картку записи не показуємо: людина йде дивитись іншу галузь, а не
+    // підсумок цієї. Інакше в новій вкладці спливав результат зі старої —
+    // з чужим ім'ям і телефоном.
+    b.onclick = () => { if (client) hangUp("", false); select(c); };
     box.appendChild(b);
   }
 }
@@ -309,6 +313,7 @@ function select(c) {
   $("result").classList.remove("on");
   $("bubbles").innerHTML = "";
   $("acts").innerHTML = "";
+  note("");
   setState("Подзвонити", `${c.agent} відповість українською`);
 }
 
@@ -382,7 +387,14 @@ function botSay(segmentId, text) {
     box.appendChild(botBubble);
     botSegments = [];
   }
-  botSegments.push({ id: Number(segmentId) || botSegments.length, text });
+  // ОДИН сегмент приходить БАГАТО разів: сервер шле його заново на кожне
+  // озвучене слово (spoken_status: new → in-progress → completed), і текст
+  // щоразу повний. Без заміни по segment_id репліка множилась на екрані
+  // двадцять разів поспіль.
+  const id = Number(segmentId) || 0;
+  const seen = botSegments.find((x) => x.id === id);
+  if (seen) seen.text = text;
+  else botSegments.push({ id, text });
   botSegments.sort((a, b) => a.id - b.id);
   botBubble.textContent = cleanSpeech(botSegments.map((x) => x.text).join(" "));
   box.scrollTop = box.scrollHeight;
@@ -394,6 +406,25 @@ function action(name, ref) {
   $("acts").appendChild(el(`
     <div class="act"><i><svg viewBox="0 0 24 24"><path d="M4 12l6 6L20 6"/></svg></i>${
       esc(label)}${/^[А-ЯA-Z]{2}-\d+$/.test(ref || "") ? ` <b style="font-weight:600">${esc(ref)}</b>` : ""}</div>`));
+}
+
+/** Стрічка «що зробила Оксана» — опитуванням журналу подій закладу.
+ *
+ *  Через RTVI це не працює: server-message із хвоста пайплайна до клієнта не
+ *  доходить. Тому інструменти пишуть рядок у таблицю events, а сторінка її
+ *  читає. Це не милиця заради демо — той самий журнал згодом стане списком
+ *  дзвінків для власника. */
+async function pollEvents() {
+  if (!callKey || !callStartedUtc) return;
+  const key = callKey, since = callStartedUtc;
+  let data;
+  try {
+    data = await (await fetch(`/api/activity/${key}?since=${encodeURIComponent(since)}`)).json();
+  } catch { return; }
+  if (key !== callKey) return;  // встигли перемкнути галузь, поки чекали
+  const events = data.events || [];
+  for (const e of events.slice(seenEvents)) action(e.kind, e.detail);
+  seenEvents = Math.max(seenEvents, events.length);
 }
 
 /* ------------------------------ дзвінок ------------------------------ */
@@ -429,14 +460,17 @@ async function call() {
   $("talk").classList.add("on");
   $("result").classList.remove("on");
   $("bubbles").innerHTML = ""; $("acts").innerHTML = "";
-  liveBubble = botBubble = null; seenSegments = new Set();
-  botSegments = []; botSpeaking = false;
-  setState("З'єднуємось…");
-  $("dial").disabled = true;
+  liveBubble = botBubble = null;
+  botSegments = []; botSpeaking = false; seenEvents = 0;
+  callOver = false; callKey = c.key;
+  // Кнопку НЕ блокуємо: якщо з'єднання зависне (а воно вміє — SDK тягне свій
+  // модуль зі стороннього CDN), єдиним виходом лишалось перезавантаження.
+  setState("З'єднуємось…", "натисніть ще раз, щоб скасувати");
 
-  // created_at у базі — UTC (datetime('now')), тож і мітку старту беремо в UTC,
-  // інакше «що з'явилось після дзвінка» промахнеться на зсув часової зони.
-  callStartedUtc = new Date().toISOString().slice(0, 19).replace("T", " ");
+  // Мітку старту дзвінка бере СЕРВЕР: created_at у базі — його datetime('now'),
+  // а годинник телефона може відставати на хвилини. Розбіжність виглядала б як
+  // «за цю розмову нічого не записано» одразу після успішного запису.
+  callStartedUtc = await serverNow();
 
   const base = `${location.protocol}//${location.hostname}:${c.port}`;
   client = window.createVoiceClient(base, {
@@ -447,9 +481,9 @@ async function call() {
       $("dialIcon").innerHTML = ICON_HANGUP;
       $("dial").setAttribute("aria-label", "Покласти трубку");
       setState("Говоріть", "натисніть ще раз, щоб покласти трубку");
-      seenEvents = 0;
       pollTimer = setInterval(pollEvents, 2000);
       startTimer();
+      if (client?.mediaState?.mic?.state === "error") micDead();
     },
     onBotAudio: attachBotAudio,
     onUserStart: () => {
@@ -467,7 +501,11 @@ async function call() {
       thinkingTimer = setTimeout(() => setState("Слухаю", "говоріть звичайним голосом"), 8000);
     },
     onUserText: (text) => { clearTimeout(typingTimer); bubble("me", text); },
-    onBotText: (text) => { if (text) botSay(botSegments.length, String(text)); },
+    onBotText: (text, segmentId) => {
+      if (text) botSay(segmentId ?? botSegments.length, String(text));
+    },
+    onMicError: micDead,
+    onMediaState: (m) => { if (m?.mic?.state === "error") micDead(); },
     onBotStart: () => {
       botSpeaking = true;
       clearTimeout(thinkingTimer);
@@ -480,11 +518,38 @@ async function call() {
   });
 
   try {
-    await client.connect();
+    // Таймаут обов'язковий: якщо SDK не дістає свій модуль із CDN (корпоративна
+    // мережа, впав інтернет), connect() не резолвиться і не падає — просто
+    // висить вічно, а на екрані назавжди лишається «З'єднуємось…».
+    await Promise.race([
+      client.connect(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 20000)),
+    ]);
   } catch (e) {
+    if (callOver) return;  // встигли скасувати вручну
     client = null;
-    hangUp();
-    note(`Не вдалося з'єднатися з ботом (порт ${c.port}). Перевірте, що запущено run_demo.py.`, true);
+    hangUp("", false);
+    note(`Не вдалося з'єднатися з ботом (порт ${c.port}). Перевірте інтернет і що запущено run_demo.py.`, true);
+  }
+}
+
+/** Мікрофон не дали або його немає.
+ *
+ *  Найпідступніший сценарій демо: SDK ковтає відмову getUserMedia і піднімає
+ *  з'єднання ЗОВСІМ без аудіо-треку. Бот вітається, індикатори бігають, а на
+ *  будь-яку фразу — тиша. Власник робить висновок «ваш бот не працює». */
+function micDead() {
+  note("Браузер не дав доступ до мікрофона — бот вас не почує. "
+       + "Дозвольте мікрофон у налаштуваннях сайту і подзвоніть ще раз.", true);
+  hangUp("", false);
+}
+
+/** Час за годинником сервера (той самий, яким база штампує created_at). */
+async function serverNow() {
+  try {
+    return (await (await fetch("/api/now")).json()).utc;
+  } catch {
+    return new Date().toISOString().slice(0, 19).replace("T", " ");
   }
 }
 
@@ -500,11 +565,24 @@ function startTimer() {
       ? `${mm}:${ss} · демо-дзвінок завершиться за ${left} с`
       : `${mm}:${ss}`;
     $("timer").classList.toggle("warn", !!limit && left <= 30);
-    if (limit && seconds >= limit) hangUp();
+    if (limit && seconds >= limit) {
+      hangUp(`Демо-дзвінок обмежений ${Math.round(limit / 60)} хв — натисніть, щоб подзвонити ще раз.`);
+    }
   }, 1000);
 }
 
-function hangUp() {
+/** Покласти трубку. Рівно один раз на дзвінок.
+ *
+ *  disconnect() сам віддає onDisconnected → onEnd → hangUp, тож без прапорця
+ *  функція виконувалась двічі: другий прохід відпрацьовував уже після
+ *  перемикання вкладки й перетирав стан нової галузі.
+ *
+ *  reason — чому обірвалось; без нього завершення по ліміту виглядало як
+ *  падіння бота. showRecord=false, коли підсумок недоречний (пішли дивитись
+ *  іншу галузь, не дали мікрофон, не з'єднались). */
+function hangUp(reason = "", showRecord = true) {
+  if (callOver) return;
+  callOver = true;
   clearTimeout(thinkingTimer); thinkingTimer = null;
   clearTimeout(typingTimer); typingTimer = null;
   clearInterval(pollTimer); pollTimer = null;
@@ -518,13 +596,19 @@ function hangUp() {
   $("dialIcon").innerHTML = ICON_CALL;
   $("dial").setAttribute("aria-label", "Подзвонити");
   setState("Подзвонити ще раз", "");
-  if (callStartedUtc) showResult();
+  if (reason) note(reason);
+  const key = callKey, since = callStartedUtc;
+  callKey = null;
+  if (showRecord && since) showResult(key, since);
 }
 
 /* --------------------------- що лишилось після --------------------------- */
 
-async function showResult() {
-  const c = current, since = callStartedUtc;
+async function showResult(key, since) {
+  // Заклад і мітку часу беремо ті, з якими дзвонили, а не поточні: поки ми
+  // чекаємо відповідь, людина може перемкнути вкладку — і в неї покажеться
+  // чужий запис із чужим телефоном.
+  const c = CARDS.find(x => x.key === key) || current;
   $("result").classList.add("on");
   $("resultBody").innerHTML = `<div class="empty">Дивимось, що з'явилось у системі…</div>`;
   // Останні кадри розмови ще можуть дописуватись — даємо їм секунду.
@@ -564,7 +648,9 @@ async function showResult() {
 
 /* ------------------------------ старт ------------------------------ */
 
-$("dial").onclick = () => (client ? hangUp() : call());
+// Поки йде з'єднання, та сама кнопка = «скасувати»; підсумок дзвінка, якого не
+// було, показувати нема сенсу — звідси tickTimer як ознака, що розмова почалась.
+$("dial").onclick = () => (client ? hangUp("", tickTimer !== null) : call());
 
 (async function init() {
   try {

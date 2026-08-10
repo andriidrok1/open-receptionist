@@ -47,6 +47,12 @@ from openai import OpenAI  # noqa: E402
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: E402
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# Ті самі параметри, що в bot.py: без них тест ганяє іншу модель поведінки, ніж
+# прод. Наочно: паралельні tool-call'и дають баг «після броні ще й заявка на
+# передзвін», якого в проді немає (там parallel_tool_calls вимкнено) — тест
+# стабільно падав на неіснуючій помилці.
+AGENT_LLM = dict(temperature=0.6, parallel_tool_calls=False)
 MAX_STEPS = 30  # запобіжник від зациклення діалогу
 
 _digits = lambda s: re.sub(r"\D", "", s or "")  # noqa: E731
@@ -151,7 +157,8 @@ def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool
             messages.append({"role": "user", "content": text})
 
         resp = client.chat.completions.create(
-            model=MODEL, messages=messages, tools=tools, tool_choice="auto")
+            model=MODEL, messages=messages, tools=tools, tool_choice="auto",
+            **AGENT_LLM)
         msg = resp.choices[0].message
 
         if msg.tool_calls:
@@ -280,7 +287,12 @@ HOTEL_SCENARIOS = {
 
 # ------------------ сценарії: запис на час (slots) ------------------
 
-S_DAY = next_weekday(1, min_days=2)  # найближчий вівторок — робочий скрізь
+# Найближчий вівторок — робочий день скрізь. Але в аварійки горизонт запису 7
+# днів, і в понеділок «наступний вівторок» опинявся за ним: сценарій падав на
+# «так далеко наперед не записуємо», а не на тому, що перевіряє.
+S_DAY = next_weekday(1, min_days=2)
+if (S_DAY - date.today()).days > BUSINESS.booking.horizon_days:
+    S_DAY = date.today() + timedelta(days=1)
 S_HOUR = 10
 S_BUSY_HOUR = 12
 S_PHONE = "0677774567"

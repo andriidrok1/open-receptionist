@@ -22,6 +22,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import load_dotenv
@@ -40,7 +41,8 @@ load_dotenv(Path(__file__).parent / ".env", override=True)
 BUSINESSES_DIR = Path(__file__).parent / "businesses"
 
 #: Ліміт ElevenLabs Scribe на довжину одного keyterm.
-MAX_KEYTERM_LEN = 20
+MAX_KEYTERM_LEN = 20  # ліміт ElevenLabs Scribe на один keyterm (у символах)
+MAX_KEYTERMS = 50  # і на весь список; на перевищенні сокет рветься з 1008
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 WEEKDAYS_UK = ("понеділок", "вівторок", "середа", "четвер", "п'ятниця", "субота", "неділя")
@@ -192,7 +194,22 @@ class Business:
     demo_tab: str  # коротка назва галузі для вкладки демо
     demo_intro: str  # що написано на демо-сторінці про це заведення
     demo_try: tuple[str, ...]  # підказки «спробуйте сказати»
+    tz: str  # часовий пояс ЗАКЛАДУ, не сервера
     booking: BookingConfig
+
+    def now(self) -> datetime:
+        """Зараз — за годинником закладу.
+
+        Раніше час усюди брався голий (`datetime.now()`), тобто за годинником
+        хоста. На ноуті це Варшава (−1 год від Києва), у Docker/Railway — UTC
+        (−3 год). Наслідок: з півночі до третьої за Києвом у промпті стояла
+        ВЧОРАШНЯ дата, а запис «на сьогодні» відхилявся як «цей час уже минув».
+        Для цілодобової аварійки це якраз години пік.
+        """
+        return datetime.now(ZoneInfo(self.tz)).replace(tzinfo=None)
+
+    def today(self) -> date:
+        return self.now().date()
 
     @property
     def customer_nom(self) -> str:
@@ -209,15 +226,24 @@ class Business:
     def stt_keyterms(self) -> list[str]:
         """Слова, які STT має розпізнавати впевнено: назви послуг + доменні.
 
-        ElevenLabs Scribe приймає keyterm не довший за 20 символів і на довшому
-        РВЕ ВСЕ З'ЄДНАННЯ (1008 invalid_request), а не ігнорує зайве. Виглядає
-        це як «розпізнавання не працює взагалі»: звук іде, VAD спрацьовує, а
-        транскриптів немає. Тому довгі назви («Підтримуюче однокімнатна»,
-        «Аварійне відкриття дверей») ріжемо на слова — користь для розпізнавання
-        лишається, обмеження дотримане.
+        ElevenLabs Scribe приймає keyterm не довший за 20 символів (саме
+        символів, не байтів — кирилиця рахується як звичайні літери) і не
+        більше 50 штук. На порушенні він РВЕ ВСЕ З'ЄДНАННЯ (1008
+        invalid_request), а не ігнорує зайве. Виглядає це як «розпізнавання не
+        працює взагалі»: звук іде, VAD спрацьовує, а транскриптів немає — і
+        pipecat 1.5 навіть не показує причину (тип invalid_request у нього не
+        оброблений, повідомлення тоне в DEBUG).
+
+        Тому обидві межі тримаємо тут, а не сподіваємось на сервер: довгі назви
+        («Аварійне відкриття дверей») ріжемо на слова, а список обрізаємо до
+        MAX_KEYTERMS. Ріжемо саме тут, бо `raw.split()` кількість термінів ще й
+        множить — на великому конфігу ліміт 50 досяжний.
         """
         out: list[str] = []
         for raw in [r.label for r in self.booking.resources] + list(self.keyterms):
+            raw = (raw or "").strip()
+            if not raw:
+                continue
             if len(raw) <= MAX_KEYTERM_LEN:
                 out.append(raw)
             else:
@@ -227,7 +253,7 @@ class Business:
             if t.lower() not in seen:
                 seen.add(t.lower())
                 uniq.append(t)
-        return uniq
+        return uniq[:MAX_KEYTERMS]
 
 
 # --------------------------- завантаження YAML ---------------------------
@@ -318,6 +344,7 @@ def load_business(key: str | None = None) -> Business:
         demo_tab=((d.get("demo") or {}).get("tab") or d.get("key") or "").strip(),
         demo_intro=((d.get("demo") or {}).get("intro") or "").strip(),
         demo_try=tuple((d.get("demo") or {}).get("try") or ()),
+        tz=d.get("tz") or "Europe/Kyiv",
         booking=booking,
     )
 
@@ -437,7 +464,12 @@ def _booking_flow(biz: Business) -> str:
             f"   Якщо {cust_nom} уже чітко назвав щось із цього — НЕ перепитуй це окремо,\n"
             "   одразу переходь до перевірки. Питай лише те, чого справді бракує.\n"
             "2. Виклич check_availability, щоб дізнатися наявність і повну вартість.\n"
-            f"   Назви їх {biz.customer_dat}."
+            f"   Назви їх {biz.customer_dat}.\n"
+            f"   {bk.unit.capitalize()} рахується від заїзду до виїзду: день виїзду НЕ\n"
+            "   рахується (з 19-го по 21-ше — це дві ночі).\n"
+            "   Дати, кількість і суму НЕ рахуй сама — бери рівно те, що прийшло в\n"
+            "   полі spoken, і перекажи його словами. Інакше ти назвеш уголос одні\n"
+            "   числа, а в системі опиняться інші."
         )
     recap = biz.speech_recap or (
         f"назви {bk.resource_label}, час, ім'я та повну вартість — одним плавним реченням"
@@ -468,14 +500,18 @@ def _booking_flow(biz: Business) -> str:
 
 def build_system_prompt(biz: Business | None = None) -> str:
     biz = biz or BUSINESS
-    today = date.today().isoformat()
-    weekday = WEEKDAYS_UK[date.today().weekday()]
+    now = biz.now()
+    today = now.date().isoformat()
+    weekday = WEEKDAYS_UK[now.weekday()]
     bk = biz.booking
 
     blocks = [
         f"Ти — {biz.agent_name}, {biz.persona} ({biz.name}).\nРозмовляй природною українською мовою.",
         _speech_rules(biz),
-        f"Сьогодні {today}, {weekday}. Коли {biz.customer_nom} називає дату чи час усно\n"
+        # Час, а не лише дата: без нього модель не знає, що таке «зараз» і
+        # «через годину» — а для аварійки це основний запит.
+        f"Сьогодні {today}, {weekday}, зараз {now.strftime('%H:%M')}.\n"
+        f"Коли {biz.customer_nom} називає дату чи час усно\n"
         "(«чотирнадцятого липня», «наступного вівторка», «десь після обіду»), сам\n"
         "переведи це у формат РРРР-ММ-ДД"
         + (" і ГГ:ХХ" if bk.is_slots else "")

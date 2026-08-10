@@ -15,6 +15,7 @@
 
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from business import load_business
@@ -96,6 +97,18 @@ def index() -> str:
 @app.get("/api/businesses")
 def api_businesses() -> JSONResponse:
     return JSONResponse(CARDS)
+
+
+@app.get("/api/now")
+def api_now() -> JSONResponse:
+    """Час за годинником сервера у тому ж форматі, що created_at у базі.
+
+    Сторінка позначає ним початок дзвінка. Брати час із браузера не можна:
+    годинник телефона легко відстає на хвилини, і тоді «що з'явилось у системі
+    за цю розмову» промахується — власник бачить «нічого не записано» одразу
+    після того, як бот вголос назвав номер броні.
+    """
+    return JSONResponse({"utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.get("/api/activity/{key}")

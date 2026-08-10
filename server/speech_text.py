@@ -49,11 +49,19 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 MAX_BREAKS = 2  # більше — і мовлення починає розганятись
 MAX_BREAK_SEC = 0.6
 
-_BREAK_RE = re.compile(r'<break\s+time="(\d*\.?\d+)s"\s*/>', re.I)
+# Модель пише тег як завгодно: без самозакриття, в одинарних лапках, з іншим
+# атрибутом. Вузький шаблон бачив лише канонічну форму, решта йшла в синтез
+# як є — повз ліміт на кількість і повз обрізання довжини.
+_BREAK_RE = re.compile(r"""<break\s+time=["'](\d*\.?\d+)s["']\s*/?>""", re.I)
+_ANY_TAG_RE = re.compile(r"<[^>]*>")
 
 
 def sanitize_breaks(text: str) -> str:
-    """Лишити максимум MAX_BREAKS тегів, кожен не довший за MAX_BREAK_SEC."""
+    """Лишити максимум MAX_BREAKS тегів, кожен не довший за MAX_BREAK_SEC.
+
+    Усе інше, що виглядає як розмітка, прибираємо: ElevenLabs із увімкненим
+    SSML нерозпізнаний тег у кращому разі проігнорує, у гіршому — озвучить.
+    """
     kept = 0
 
     def repl(m: re.Match) -> str:
@@ -64,7 +72,10 @@ def sanitize_breaks(text: str) -> str:
         secs = min(float(m.group(1)), MAX_BREAK_SEC)
         return f'<break time="{secs}s" />'
 
-    return _BREAK_RE.sub(repl, text)
+    text = _BREAK_RE.sub(repl, text)
+    # Захист від решти розмітки: свої break-теги вже стоять, тож вирізаємо
+    # тільки те, що не є ними.
+    return _ANY_TAG_RE.sub(lambda m: m.group(0) if m.group(0).startswith("<break ") else " ", text)
 
 
 class UkrainianSpeechFilter:
@@ -124,6 +135,14 @@ class WholeReplyAggregator(FrameProcessor):
     внутрішній агрегатор TTS. Простий текст той спершу синтезує, а потім ще раз
     вивалює з власного буфера на кінці відповіді — репліка озвучувалась двічі.
 
+    Тут же і санітайзер пауз — раніше він стояв у `text_filters` самого TTS, і
+    це псувало текст. Фільтр міняє рядок, який іде в синтез, але вихідний
+    лишається як був; трекер вимовлених слів веде курсор по обох одночасно, а
+    теги різної довжини («2s» → «0.6s») курсор зсувають. У підсумку в історію
+    діалога й на екран потрапляло «Ваш лефон: нул шістдесят три» — з літерами,
+    вигризеними посеред слів. Санітайзимо ДО того, як текст роздвоївся: у
+    синтез і в контекст іде один і той самий рядок.
+
     Ставити між LLM і TTS.
     """
 
@@ -139,7 +158,7 @@ class WholeReplyAggregator(FrameProcessor):
             self._parts, self._collecting = [], True
             await self.push_frame(frame, direction)
         elif isinstance(frame, LLMFullResponseEndFrame):
-            text = "".join(self._parts).strip()
+            text = sanitize_breaks("".join(self._parts)).strip()
             self._parts, self._collecting = [], False
             if text:
                 await self.push_frame(

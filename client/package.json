@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "esbuild src.js --bundle --format=iife --minify --outfile=../server/static/voice-client.js"
   },
   "keywords": [],
   "author": "",

@@ -35,12 +35,19 @@ from business import BUSINESS, build_system_prompt, greeting_hint
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    EndFrame,
     Frame,
+    InterruptionFrame,
     LLMRunFrame,
+    STTMuteFrame,
+    TTSSpeakFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
@@ -108,6 +115,42 @@ class ServerVADSpeechTimeoutStopStrategy(SpeechTimeoutUserTurnStopStrategy):
         return await super().process_frame(frame)
 
 
+class MuteSTTWhileBotSpeaks(FrameProcessor):
+    """Не віддавати аудіо в STT, поки говорить бот.
+
+    Scribe у режимі MANUAL коміту не «нарізає» мовлення сам: усе, що влетіло в
+    мікрофон між двома комітами, приписується гостю одним шматком. А коміт
+    настає лише коли гість договорив. Тому відлуння з динаміків (навіть тихе,
+    −55 dBFS — локальний Silero його не чує, а Scribe чудово розбирає) осідає в
+    буфері й приходить у контекст як РЕПЛІКА ГОСТЯ. Заміряно: бот сказав фразу
+    про бронювання — і вона ж повернулась як слова людини, витіснивши те, що
+    людина справді сказала.
+
+    Друга біда того ж кореня: Scribe шле проміжні транскрипти й на відлунні, а
+    вони відкривають хід гостя і перебивають бота на півслові.
+
+    Тому на час мовлення бота глушимо вхід STT. Barge-in не ламається: VAD
+    стоїть ВИЩЕ за течією і хід відкриє, а перебивання одразу дає
+    BotStoppedSpeakingFrame — глушник знімається. Втрачається хіба перша
+    частка секунди перебивки.
+
+    Ставити перед STT: Bot*SpeakingFrame ідуть сюди вгору від
+    transport.output(), а STTMuteFrame ми штовхаємо вниз — у сам STT.
+    """
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        await self.push_frame(frame, direction)
+
+        if isinstance(frame, BotStartedSpeakingFrame):
+            await self.push_frame(STTMuteFrame(mute=True), FrameDirection.DOWNSTREAM)
+        elif isinstance(frame, (BotStoppedSpeakingFrame, InterruptionFrame)):
+            # InterruptionFrame — страховка: якщо колись з'явиться шлях, де бот
+            # замовк без BotStoppedSpeakingFrame, глушник не має лишитись
+            # назавжди (це означало б глухого бота до кінця дзвінка).
+            await self.push_frame(STTMuteFrame(mute=False), FrameDirection.DOWNSTREAM)
+
+
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     """Run the voice bot for this session."""
     aiohttp_session = aiohttp.ClientSession()
@@ -142,12 +185,44 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # Тому фантоми на тиші глушаться на стороні клієнта: показуємо лише
             # фінальний транскрипт, проміжні здогадки — ніколи.
         )
+        # Втрата з'єднання зі Scribe посеред розмови виглядає як «бот раптом
+        # оглух»: звук іде, VAD малює «слухаю», а транскриптів більше немає
+        # ніколи. Своїми силами лікується лише те, що видно, — тому хоча б
+        # кричимо в лог, а не мовчимо, як робить pipecat за замовчуванням.
+        @stt.event_handler("on_disconnected")
+        async def on_stt_disconnected(service):
+            logger.error("STT: з'єднання зі Scribe розірвано")
+            # Pipecat пересоздаёт задачу читання відповідей тільки якщо вона
+            # None, а після виходу з циклу вона лишається завершеною, але не
+            # None. Тоді сокет перепідключиться, аудіо піде — а слухати
+            # відповіді буде нікому, і бот оглухне до кінця дзвінка мовчки.
+            task = getattr(service, "_receive_task", None)
+            if task is not None and task.done():
+                service._receive_task = None
+
+        @stt.event_handler("on_connection_error")
+        async def on_stt_error(service, error):
+            logger.error(f"STT: помилка з'єднання зі Scribe — {error}")
+
         # Локальний VAD: він і сегментує мовлення для STT, і дає межі ходу.
-        # stop_secs=0.8 — пауза, після якої вважаємо, що гість договорив.
+        # Дві РІЗНІ ролі, які раніше плутались в одному числі:
+        #   stop_secs — коли вважати сегмент мовлення закінченим (коміт у STT);
+        #   user_speech_timeout (нижче) — скільки ще чекати, раптом людина
+        #     просто задумалась посеред фрази.
+        # Було 0.8 + 0.7: коміт наставав пізно, а pipecat ще й скаржився, що
+        # запас на затримку STT схлопнувся в нуль (stop_secs >= p99 0.41с).
+        # Стало 0.4 + 1.1 — сумарний поріг той самий ~1.5с, але коміти йдуть
+        # удвічі частіше, а «дати договорити» тримає той параметр, який для
+        # цього й призначений.
+        # audio_idle_timeout: за замовчуванням 1с — секундна дірка в мережі на
+        # мобільному інтернеті насильно закривала мовлення посеред фрази, і
+        # агент відповідав на половину речення. 3с ловить реальний мьют
+        # мікрофона, але не ловить джитер.
         vad_processor = VADProcessor(
             vad_analyzer=SileroVADAnalyzer(
-                params=VADParams(confidence=0.7, start_secs=0.2, stop_secs=0.8, min_volume=0.6)
-            )
+                params=VADParams(confidence=0.7, start_secs=0.2, stop_secs=0.4, min_volume=0.6)
+            ),
+            audio_idle_timeout=3.0,
         )
     else:
         # Серверний VAD треба задавати ЯВНО: turn_detection=None для
@@ -208,9 +283,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 settings=ElevenLabsTTSService.Settings(**voice_settings),
                 # Без цього break-теги поїдуть у модель як звичайний текст.
                 enable_ssml_parsing=True,
-                # Санітайзер пауз. Фільтри застосовуються вже після склейки
-                # речень, тобто бачать цілу репліку, а не уривок стріму.
-                text_filters=[UkrainianSpeechFilter()],
+                # За замовчуванням pipecat чекає перший байт аудіо 3 секунди, і
+                # якщо ElevenLabs не встиг — мовчки викидає ВСЮ репліку, а сам
+                # лишається на паузі до наступного перебивання. Тобто бот не
+                # просто ковтає фразу, а глухне до кінця ходу. Десять секунд —
+                # запас на чергу й мережу.
+                stop_frame_timeout_s=float(os.getenv("TTS_FIRST_BYTE_TIMEOUT", "10")),
+                # При whole_reply санітайзер пауз працює в WholeReplyAggregator,
+                # і тут фільтра бути НЕ повинно: фільтр TTS міняє текст лише для
+                # синтезу, а розбіжність із вихідним рядком вигризала літери зі
+                # слів у історії діалога («Ваш лефон: нул шістдесят три»).
+                text_filters=[] if whole_reply else [UkrainianSpeechFilter()],
             )
     else:
         tts = OpenAITTSService(
@@ -245,9 +328,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     if vad_processor is not None:
         # ElevenLabs + локальний Silero VAD: VAD сам виробляє VADUser*-фрейми,
         # тож базова стратегія працює напряму (start за VAD, stop за таймером).
+        # use_interim=False обов'язково: проміжний транскрипт відкривав хід
+        # гостя і перебивав бота на півслові, а фінального за ним не було
+        # (при MANUAL коміті він приходить лише після VAD-стопу) — хід висів до
+        # сторожевого таймера 5с і закривався порожнім, тобто бот обривався і
+        # далі мовчав п'ять секунд. Саму стратегію лишаємо як запобіжник на
+        # випадок іншого провайдера STT.
         turn_strategies = UserTurnStrategies(
-            start=[VADUserTurnStartStrategy(), TranscriptionUserTurnStartStrategy()],
-            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.7)],
+            start=[VADUserTurnStartStrategy(), TranscriptionUserTurnStartStrategy(use_interim=False)],
+            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.1)],
         )
     else:
         # OpenAI серверний VAD шле лише UserStarted/StoppedSpeakingFrame (не VAD*),
@@ -269,6 +358,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         [
             transport.input(),
             *([vad_processor] if vad_processor is not None else []),
+            MuteSTTWhileBotSpeaks(),
             stt,
             user_aggregator,
             llm,
@@ -317,14 +407,23 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # Демо-сторінка публічна, а кожна хвилина розмови коштує грошей. Ліміт
     # тримаємо тут, а не тільки в інтерфейсі: вкладку можна просто не закрити.
     max_call = int(os.getenv("MAX_CALL_SECONDS", "0"))
+    hang_up_task = None
     if max_call > 0:
 
         async def hang_up_later() -> None:
             await asyncio.sleep(max_call)
             logger.info(f"Ліміт розмови {max_call}с вичерпано — завершую")
-            await worker.cancel()
+            # EndFrame, а не cancel(): cancel рубає аудіо-таск не зливши буфер,
+            # тобто бот обривається посеред слова і це звучить як падіння
+            # зв'язку. EndFrame дає договорити прощання.
+            await worker.queue_frames([
+                TTSSpeakFrame("Вибачте, демо-дзвінок обмежений у часі. Гарного дня!"),
+                EndFrame(),
+            ])
 
-        asyncio.create_task(hang_up_later())
+        # Посилання зберігаємо: задачу без посилань asyncio має право прибрати
+        # збирачем сміття, і тоді ліміт просто не спрацює.
+        hang_up_task = asyncio.create_task(hang_up_later())
 
     runner = WorkerRunner(handle_sigint=False)
 
@@ -332,6 +431,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     try:
         await runner.run()
     finally:
+        if hang_up_task:
+            hang_up_task.cancel()
         await aiohttp_session.close()
 
 

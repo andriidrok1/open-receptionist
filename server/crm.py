@@ -32,6 +32,11 @@ DB_PATH = Path(os.getenv("CRM_DB") or Path(__file__).parent / f"{BIZ.key}.db")
 
 _ISO_MIN = "%Y-%m-%dT%H:%M"
 
+#: Скільки хвилин у минуле ще вважаються «зараз» (див. _parse_slot).
+GRACE_MIN = 10
+#: Верхня межа тривалості одного запису в одиницях (ночах).
+MAX_UNITS = 60
+
 
 # ------------------------------- телефон -------------------------------
 
@@ -69,10 +74,17 @@ def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
     elif len(digits) == 11 and digits.startswith("80"):
         digits = "0" + digits[2:]
 
-    if len(digits) != 10 or not digits.startswith("0"):
+    if len(digits) != 10:
         return None, (
             f"у номері {len(digits)} цифр замість десяти — "
             "перепитай номер і повтори його вголос групами цифр"
+        )
+    if not digits.startswith("0"):
+        # Окрема гілка: інакше на номері з десятьма цифрами, але не з нуля,
+        # агент вимовляв уголос «у номері десять цифр замість десяти».
+        return None, (
+            "український номер починається з нуля — перепитай номер "
+            "і повтори його вголос групами цифр"
         )
     return digits, None
 
@@ -117,6 +129,9 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Запис іде під транзакцією (див. create_booking), тож паралельний дзвінок
+    # має дочекатись, а не впасти з «database is locked».
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -225,12 +240,19 @@ def _parse_nights(start: str, end: str) -> tuple[str, str, int, str | None]:
         return "", "", 0, "неправильний формат дат, очікується РРРР-ММ-ДД"
     if (co - ci).days <= 0:
         return "", "", 0, "дата виїзду має бути пізніше за дату заїзду — перепитай дати"
-    if ci < date.today():
+    # Без верхньої межі одна обмовка в даті виїзду перетворюється на бронь
+    # «чотириста ночей, чотириста вісімдесят тисяч» — і номер заблоковано на рік.
+    if (co - ci).days > MAX_UNITS:
         return "", "", 0, (
-            f"ця дата вже минула (сьогодні {date.today().isoformat()}). "
+            f"{(co - ci).days} {_plural((co - ci).days, BOOK.unit)} — це забагато "
+            f"(максимум {MAX_UNITS}); перепитай дати, схоже, ти неправильно почула"
+        )
+    if ci < BIZ.today():
+        return "", "", 0, (
+            f"ця дата вже минула (сьогодні {BIZ.today().isoformat()}). "
             "Скажи про це вголос і спитай, на яке число потрібно"
         )
-    if (ci - date.today()).days > BOOK.horizon_days:
+    if (ci - BIZ.today()).days > BOOK.horizon_days:
         return "", "", 0, f"так далеко наперед не бронюємо (максимум {BOOK.horizon_days} днів)"
     return ci.isoformat(), co.isoformat(), (co - ci).days, None
 
@@ -244,12 +266,16 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
         return "", "", "неправильний формат часу, очікується РРРР-ММ-ДДTГГ:ХХ"
     finish = begin + timedelta(minutes=duration_min)
 
-    if begin < datetime.now():
+    # Хвилин десять назад — це не «минулий час», а «приїжджайте зараз»: поки
+    # людина домовляється, названа нею хвилина встигає стати минулою. Раніше
+    # аварійка на цьому втрачала по три-чотири ходи поспіль («цей час уже
+    # минув» на прохання приїхати негайно), і це в дзвінку, де вода тече.
+    if begin < BIZ.now() - timedelta(minutes=GRACE_MIN):
         return "", "", (
-            f"цей час уже минув (зараз {datetime.now().strftime('%Y-%m-%d %H:%M')}). "
+            f"цей час уже минув (зараз {BIZ.now().strftime('%Y-%m-%d %H:%M')}). "
             "Скажи про це вголос і спитай, на коли потрібно"
         )
-    if (begin.date() - date.today()).days > BOOK.horizon_days:
+    if (begin.date() - BIZ.today()).days > BOOK.horizon_days:
         return "", "", f"так далеко наперед не записуємо (максимум {BOOK.horizon_days} днів)"
 
     hours = BOOK.hours_for(begin.date())
@@ -281,7 +307,7 @@ def free_slots(
     res = BOOK.resource(resource_key)
     if not res:
         return []
-    now = datetime.now()
+    now = BIZ.now()
     hours = BOOK.hours_for(day)
     if not hours:
         return []
@@ -303,6 +329,54 @@ def free_slots(
 
 # ------------------------------ наявність ------------------------------
 
+_MONTHS_GEN = (
+    "січня", "лютого", "березня", "квітня", "травня", "червня",
+    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+)
+
+#: Форми одиниці тарифікації: 1 / 2-4 / 5+. Рядок для озвучення читається
+#: вголос, тому «3 ніч» тут не годиться.
+_UNIT_FORMS = {
+    "ніч": ("ніч", "ночі", "ночей"),
+    "доба": ("доба", "доби", "діб"),
+    "день": ("день", "дні", "днів"),
+    "година": ("година", "години", "годин"),
+}
+
+
+def _plural(n: int, unit: str) -> str:
+    forms = _UNIT_FORMS.get(unit)
+    if not forms:
+        return unit
+    if n % 10 == 1 and n % 100 != 11:
+        return forms[0]
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return forms[1]
+    return forms[2]
+
+
+def _spoken(label: str, starts_at: str, ends_at: str, units: int, price: int) -> str:
+    """Готовий переказ запису — рівно те, що агент має вимовити вголос.
+
+    Навіщо: модель не зобов'язана рахувати. Коли інструмент віддавав розсип
+    полів, вона регулярно озвучувала своє: казала «виїзд двадцятого», а в базу
+    йшло двадцять перше; казала «дві ночі — дві тисячі чотириста» на бронь в
+    одну ніч за тисячу двісті. Гість чує одне, заклад бачить інше — і сварка
+    на стійці. Тепер усі числа зібрані в один рядок з бази, а моделі лишається
+    його переказати словами.
+    """
+    def dm(iso: str) -> str:
+        d = date.fromisoformat(iso[:10])
+        return f"{d.day} {_MONTHS_GEN[d.month - 1]}"
+
+    money = f"{price} {BIZ.currency}"
+    if BOOK.is_slots:
+        return f"{label}, {dm(starts_at)} о {starts_at[11:16]}, {money}"
+    return (
+        f"{label}, заїзд {dm(starts_at)}, виїзд {dm(ends_at)}, "
+        f"{units} {_plural(units, BOOK.unit)} — {money}"
+    )
+
 
 def check_availability(
     resource: str,
@@ -315,10 +389,14 @@ def check_availability(
     nights: start = дата заїзду, end = дата виїзду (РРРР-ММ-ДД).
     slots:  start = 'РРРР-ММ-ДДTГГ:ХХ', end рахується з тривалості послуги.
     """
+    # У помилкових відповідях НЕ можна віддавати "available": модель бачила
+    # `available: false` поруч з поясненням і казала гостю «вільних немає»,
+    # хоча місць було повно. Заміряно на аварійці: людина з протікаючою трубою
+    # почула «сантехніків немає», а вільних бригад було дві.
     key = BOOK.normalize_resource(resource)
     if key is None:
         known = ", ".join(r.label for r in BOOK.resources)
-        return {"available": False, "error": f"невідомий варіант {resource!r}; є: {known}"}
+        return {"error": f"невідомий варіант {resource!r}; є: {known}"}
     res = BOOK.resource(key)
 
     if BOOK.is_slots:
@@ -328,10 +406,10 @@ def check_availability(
         starts_at, ends_at, units, err = _parse_nights(start, end or "")
         price_per_unit = res.price
     if err:
-        return {"available": False, "error": err}
+        return {"error": err}
 
     if BOOK.ask_party and party_size > BOOK.max_party:
-        return {"available": False, "error": f"максимум {BOOK.max_party} на один запис"}
+        return {"error": f"максимум {BOOK.max_party} на один запис"}
 
     with _connect() as conn:
         left = res.capacity - _occupied(conn, key, starts_at, ends_at)
@@ -346,6 +424,8 @@ def check_availability(
         "currency": BIZ.currency,
         "left": max(left, 0),
     }
+    if left > 0:
+        out["spoken"] = _spoken(res.label, starts_at, ends_at, units, out["total_price"])
     if BOOK.is_slots:
         wanted = datetime.strptime(starts_at, _ISO_MIN)
         out["duration_min"] = res.duration_min
@@ -372,13 +452,20 @@ def check_availability(
 
 
 def _generate_ref_code(conn: sqlite3.Connection) -> str:
-    """Унікальний номер запису. Шестизначне число (без ведучих нулів), щоб TTS
-    читав його природно («Бе-ер сто двадцять три чотириста»), а не по літерах."""
-    for _ in range(20):
-        code = BOOK.ref_prefix + str(uuid.uuid4().int % 900_000 + 100_000)
+    """Унікальний номер запису — ЧОТИРИ цифри.
+
+    Було шість, і модель їх системно перевіювала: інструмент повертав БР-919873,
+    а вголос звучало «дев'ятсот дев'яносто одна тисяча вісімсот сімдесят три»
+    (991873) — гість записував номер, якого в базі немає. Чотиризначне число
+    gpt-4o-mini вимовляє правильно («сорок вісім, дванадцять»), а на демо-базі
+    й на реальному потоці закладу колізій не буде: унікальність усе одно
+    перевіряється тут же, а при вичерпанні лишається запасний шестизначний.
+    """
+    for _ in range(30):
+        code = BOOK.ref_prefix + str(uuid.uuid4().int % 9_000 + 1_000)
         if not conn.execute("SELECT 1 FROM bookings WHERE ref_code = ?", (code,)).fetchone():
             return code
-    return BOOK.ref_prefix + str(uuid.uuid4().int % 90_000_000 + 10_000_000)
+    return BOOK.ref_prefix + str(uuid.uuid4().int % 900_000 + 100_000)
 
 
 def create_booking(
@@ -414,33 +501,49 @@ def create_booking(
             out["alternatives"] = avail["alternatives"]
         return out
 
+    # Перевірка наявності вище і вставка нижче — дві різні дії; між ними встигає
+    # влізти паралельний дзвінок. Заміряно: сім одночасних записів на ресурс із
+    # capacity=3 проходили всі сім. Тому остаточне рішення ухвалюємо всередині
+    # транзакції, яка тримає запис на час перевірки (BEGIN IMMEDIATE).
     with _connect() as conn:
-        ref_code = _generate_ref_code(conn)
-        conn.execute(
-            """
-            INSERT INTO bookings
-                (id, ref_code, resource, starts_at, ends_at, party_size,
-                 customer_name, phone, total_price, details)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                uuid.uuid4().hex,
-                ref_code,
-                avail["resource"],
-                avail["starts_at"],
-                avail["ends_at"],
-                party_size,
-                customer_name,
-                phone,
-                avail["total_price"],
-                json.dumps(details, ensure_ascii=False) if details else None,
-            ),
-        )
-        conn.commit()
+        conn.isolation_level = None
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            res = BOOK.resource(avail["resource"])
+            taken = _occupied(conn, avail["resource"], avail["starts_at"], avail["ends_at"])
+            if res.capacity - taken <= 0:
+                conn.execute("ROLLBACK")
+                return {"success": False, "error": "на цей час вільного місця немає"}
+            ref_code = _generate_ref_code(conn)
+            conn.execute(
+                """
+                INSERT INTO bookings
+                    (id, ref_code, resource, starts_at, ends_at, party_size,
+                     customer_name, phone, total_price, details)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    ref_code,
+                    avail["resource"],
+                    avail["starts_at"],
+                    avail["ends_at"],
+                    party_size,
+                    customer_name,
+                    phone,
+                    avail["total_price"],
+                    json.dumps(details, ensure_ascii=False) if details else None,
+                ),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
     return {
         "success": True,
         "ref_code": ref_code,
+        "spoken": avail.get("spoken", ""),
         "resource_label": avail["resource_label"],
         "starts_at": avail["starts_at"],
         "ends_at": avail["ends_at"],
@@ -572,11 +675,11 @@ def _capacity_today(res) -> int:
     """Скільки записів на цей ресурс фізично влазить у сьогоднішній день."""
     if not BOOK.is_slots:
         return res.capacity
-    hours = BOOK.hours_for(date.today())
+    hours = BOOK.hours_for(BIZ.today())
     if not hours or not res.duration_min:
         return 0
     open_min = (
-        datetime.combine(date.today(), hours[1]) - datetime.combine(date.today(), hours[0])
+        datetime.combine(BIZ.today(), hours[1]) - datetime.combine(BIZ.today(), hours[0])
     ).seconds // 60
     return res.capacity * max(open_min // res.duration_min, 1)
 
@@ -589,11 +692,11 @@ def stats(period_days: int = 30) -> dict:
     сьогоднішні записи проти місткості дня.
     """
     bookings = list_bookings()
-    now = datetime.now()
+    now = BIZ.now()
     cur_start = now - timedelta(days=period_days)
     prev_start = now - timedelta(days=2 * period_days)
-    horizon = now.strftime(_ISO_MIN) if BOOK.is_slots else date.today().isoformat()
-    today_prefix = date.today().isoformat()
+    horizon = now.strftime(_ISO_MIN) if BOOK.is_slots else BIZ.today().isoformat()
+    today_prefix = BIZ.today().isoformat()
 
     def created(b: dict) -> datetime:
         return datetime.fromisoformat(b["created_at"])

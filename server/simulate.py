@@ -35,7 +35,9 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 from datetime import date, timedelta
+from pathlib import Path
 
 _ARGV = sys.argv[1:]
 if "--business" in _ARGV:
@@ -46,6 +48,13 @@ SHOW = "--show" in _ARGV
 if SHOW:
     _ARGV.remove("--show")
 
+# Симуляція чистить базу перед кожною персоною — і робила це в БОЙОВІЙ базі
+# закладу, разом із демо-даними, на яких стоїть дашборд. Тимчасова база має
+# бути обрана ДО імпорту crm: він фіксує шлях на імпорті.
+os.environ.setdefault(
+    "CRM_DB", str(Path(tempfile.gettempdir()) / f"simulate_{os.environ.get('BUSINESS', 'hotel')}.db")
+)
+
 import agent_tools  # noqa: E402
 import crm  # noqa: E402
 from business import BUSINESS, build_system_prompt  # noqa: E402
@@ -55,6 +64,12 @@ from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 CALLER_MODEL = os.getenv("SIMULATE_CALLER_MODEL", "gpt-4o-mini")
 MAX_TURNS = 14
+
+# Ті самі параметри, що в bot.py: без них тест ганяє іншу модель поведінки, ніж
+# прод. Наочно: паралельні tool-call'и дають баг «після броні ще й заявка на
+# передзвін», якого в проді немає (там parallel_tool_calls вимкнено) — тест
+# стабільно падав на неіснуючій помилці.
+AGENT_LLM = dict(temperature=0.6, parallel_tool_calls=False)
 
 BOOK = BUSINESS.booking
 _digits = lambda s: re.sub(r"\D", "", s or "")  # noqa: E731
@@ -187,7 +202,8 @@ def run_call(client: OpenAI, tools: list, persona: dict) -> dict:
         # --- хід агента (може містити виклики інструментів) ---
         for _ in range(6):
             resp = client.chat.completions.create(
-                model=MODEL, messages=agent_msgs, tools=tools, tool_choice="auto")
+                model=MODEL, messages=agent_msgs, tools=tools, tool_choice="auto",
+                **AGENT_LLM)
             msg = resp.choices[0].message
             if not msg.tool_calls:
                 break
