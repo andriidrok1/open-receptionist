@@ -228,11 +228,36 @@ def check_no_fabricated_data(run) -> list[str]:
             val = (args.get(field) or "").strip()
             if not val:
                 continue
-            # One meaningful word from the value having been spoken is enough.
-            words = [w for w in re.findall(r"[\w']{4,}", val.lower())]
-            if words and not any(w[:5] in said for w in words):
-                bad.append(f"{name}: {field} = {val!r} — that never came up in the conversation")
+            missing = _unspoken_parts(val, said, said_digits)
+            if missing:
+                bad.append(
+                    f"{name}: {field} = {val!r} — {', '.join(missing)} never came up"
+                )
     return bad
+
+
+def _unspoken_parts(value: str, said: str, said_digits: str) -> list[str]:
+    """Which parts of a value the caller never actually said.
+
+    One matching word used to be enough, and that made the check almost blind:
+    an address of "1200 Irving Street, San Francisco" — the practice's own
+    address, straight out of its config — counted as heard because the caller
+    had said the word "street". The same held for "вулиця" and "квартира".
+
+    So: every number and every word in the value has to have been spoken. Note
+    the direction — the agent is free to DROP parts ("Judah Street, 4B" for a
+    longer spoken address); what it may not do is ADD a word nobody said.
+
+    Strict is right here specifically because this is the simulator: the
+    caller's line is literal text, not a transcription, so an agent copying what
+    it heard matches exactly. The same rule against real speech recognition
+    would need slack for mangled words.
+    """
+    numbers = re.findall(r"\d+", value)
+    unspoken = [n for n in numbers if n not in said_digits]
+    words = re.findall(r"[^\W\d_]{4,}", value.lower(), re.UNICODE)
+    unspoken += [w for w in words if w[:5] not in said]
+    return unspoken
 
 
 def _slot_key(args: dict) -> tuple:

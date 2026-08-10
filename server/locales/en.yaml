@@ -327,3 +327,57 @@ defaults:
     currency: "$"
     customer: {nom: customer, gen: customer, dat: customer}
     escalation_examples: anything outside booking
+
+# Owner dashboard labels. A person reads them, so they belong to the language.
+dashboard:
+  title: Dashboard
+  subtitle: How the voice agent is doing
+  overview: Overview
+  agent_role: Voice agent
+  agent_online: Online
+  agent_settings: Agent settings
+  updated: Updated
+  occupancy: Occupancy
+  occ_busy: Booked
+  free: Places available
+  few: Nearly full
+  none_left: Full
+  closed_today: Closed today
+  revenue: Revenue
+  records: Bookings
+  total_suffix: total
+  avg_check: Average
+  callbacks: Callback requests
+  customer: Customer
+  phone: Phone
+  question: Question
+  received: Received
+  created: Created
+  amount: Amount
+  thousands: k
+  no_previous: no data for the previous period
+  vs_previous: vs previous period
+  no_data: no data
+  datetime_col: Date and time
+  dates_col: Dates
+  duration: Duration
+  units: Units
+  minutes_short: min
+  showing: Showing
+  of: of
+  just_now: just now
+  nav_calls: Calls
+  nav_finance: Finance
+  nav_settings: Settings
+  agent_active: active
+  total: Total
+  view_all: View all
+  months_short: [Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec]
+
+# Invented names for demo data (seed_demo.py). An English panel full of
+# Ukrainian surnames reads as an unfinished product.
+fixtures:
+  first_names: [James, Maria, David, Sarah, Michael, Emily, Robert, Jessica,
+                William, Ashley, Daniel, Amanda, Christopher, Nicole, Brian, Laura]
+  last_names: [Miller, Johnson, Garcia, Brown, Davis, Rodriguez, Wilson, Martinez,
+               Anderson, Taylor, Thomas, Moore]

@@ -8,8 +8,6 @@ Running it:
 The data is realistic but invented. For a real client, simply do not run this
 script — the dashboard counts the records the voice agent actually created.
 
-TODO(locale): the name lists below are Ukrainian; an English business needs its
-own, which is one more thing the language pack should carry.
 """
 
 import argparse
@@ -25,16 +23,10 @@ from business import BUSINESS, slot_grid
 
 random.seed(42)  # reproducibility
 
-FIRST = [
-    "Андрій", "Олена", "Ігор", "Марія", "Юлія", "Олександр", "Наталія", "Дмитро",
-    "Софія", "Максим", "Ірина", "Богдан", "Тетяна", "Віктор", "Оксана", "Сергій",
-    "Катерина", "Павло", "Анна", "Роман", "Вікторія", "Микола", "Дарина", "Тарас",
-]
-LAST = [
-    "Коваленко", "Мельник", "Сидоренко", "Ткаченко", "Бондаренко", "Шевченко",
-    "Кравченко", "Бойко", "Ковальчук", "Поліщук", "Гончаренко", "Лисенко",
-    "Марченко", "Савченко", "Руденко", "Мороз", "Кузьменко", "Пономаренко",
-]
+# Names come from the language pack: seeding an English business with Ukrainian
+# surnames made its dashboard look half-finished.
+FIRST = list(BUSINESS.pack.raw("fixtures.first_names"))
+LAST = list(BUSINESS.pack.raw("fixtures.last_names"))
 
 BOOK = BUSINESS.booking
 # The first items on the price list are ordered more often than the last ones,

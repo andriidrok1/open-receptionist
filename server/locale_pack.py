@@ -104,6 +104,10 @@ REQUIRED_KEYS = (
     "notes.message_recorded",
     "notes.call_time_limit",
     "ui.duration_min",
+    "dashboard.title",
+    "dashboard.months_short",
+    "fixtures.first_names",
+    "fixtures.last_names",
     "ui.per_unit",
     "spoken.datetime",
     # Defaults for business-config fields. They belong to the language: a config

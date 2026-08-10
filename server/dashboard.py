@@ -36,12 +36,11 @@ BUSINESS_INFO = {
         "action": BOOK.action.capitalize(),
         "unit": None if BOOK.is_slots else BOOK.unit.capitalize(),
         "party": BOOK.party_label.capitalize() if BOOK.ask_party else None,
-        # Written out rather than composed from the YAML labels: "Occupancy by
-        # room type" declined incorrectly is exactly the kind of small wrongness
-        # that gives away a product assembled from a template.
-        # TODO(locale): these two belong in the language pack.
-        "occupancy": "Завантаження на сьогодні" if BOOK.is_slots else "Завантаження зараз",
     },
+    # Every label the page shows, from the business's own language pack. The
+    # page used to carry them hard-coded, so an English business had an English
+    # agent answering the phone and a Ukrainian panel to look at.
+    "ui": BUSINESS.pack.raw("dashboard"),
 }
 
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Дашборд · голосовий агент</title>
+<title>Dashboard</title>
 <style>
   :root {
     --bg: #f5f6f8;
@@ -169,30 +169,30 @@
         </svg>
       </div>
       <div class="brand-name" id="brandName">RIVIERA HOTEL</div>
-      <div class="brand-city" id="brandCity">Одеса, Україна</div>
+      <div class="brand-city" id="brandCity"></div>
     </div>
     <nav class="nav">
       <a class="active" href="#">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-        Огляд
+        <span id="navOverview"></span>
       </a>
       <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg> <span id="navAction">Записи</span></a>
       <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M3 21V7l9-4 9 4v14"/><path d="M9 21v-6h6v6"/></svg> <span id="navResource">Послуги</span></a>
       <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/></svg> <span id="navCustomer">Клієнти</span></a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/></svg> Дзвінки</a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Фінанси</a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z"/></svg> Налаштування</a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/></svg> <span id="navCalls"></span></a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> <span id="navFinance"></span></a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z"/></svg> <span id="navSettings"></span></a>
     </nav>
     <div class="agent-card">
       <div class="agent-row">
         <div class="agent-mic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg></div>
         <div>
-          <div class="agent-role">Голосовий агент</div>
-          <div class="agent-name" id="agentName">Оксана</div>
-          <div class="agent-state"><span class="dot"></span>Онлайн</div>
+          <div class="agent-role" id="agentRole"></div>
+          <div class="agent-name" id="agentName"></div>
+          <div class="agent-state"><span class="dot"></span><span id="agentState"></span></div>
         </div>
       </div>
-      <button class="agent-btn">Налаштування агента</button>
+      <button class="agent-btn" id="agentSettings"></button>
     </div>
   </aside>
 
@@ -200,13 +200,13 @@
   <main class="main">
     <div class="topbar">
       <div>
-        <h1 class="h1">Дашборд</h1>
-        <div class="sub" id="subTitle">Огляд роботи голосового агента</div>
+        <h1 class="h1" id="pageTitle"></h1>
+        <div class="sub" id="subTitle"></div>
       </div>
       <div class="pills">
-        <div class="pill pill-agent"><span class="dot"></span><div><div class="strong" id="pillAgent">Оксана · онлайн</div><div class="tiny">Голосовий агент активний</div></div></div>
+        <div class="pill pill-agent"><span class="dot"></span><div><div class="strong" id="pillAgent"></div><div class="tiny" id="pillAgentSub"></div></div></div>
         <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg><span id="pillRange" class="strong">—</span></div>
-        <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg><span>Оновлено: <span id="pillUpd" class="strong">щойно</span></span></div>
+        <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg><span><span id="updatedLabel"></span>: <span id="pillUpd" class="strong">щойно</span></span></div>
       </div>
     </div>
 
@@ -214,19 +214,19 @@
 
     <section class="grid2">
       <div class="card">
-        <div class="card-h"><div class="card-title" id="occTitle">Завантаження</div></div>
-        <div class="occ-head"><div id="occCol">Варіант</div><div></div><div style="text-align:right">Зайнято</div><div style="text-align:right">Всього</div></div>
+        <div class="card-h"><div class="card-title" id="occTitle"></div></div>
+        <div class="occ-head"><div id="occCol"></div><div></div><div style="text-align:right" id="occBusy"></div><div style="text-align:right" id="occTotal"></div></div>
         <div id="occ"></div>
         <div class="legend">
-          <span><i style="background:var(--good)"></i>Є вільні місця</span>
-          <span><i style="background:var(--warn)"></i>Мало вільних</span>
-          <span><i style="background:var(--crit)"></i>Немає вільних</span>
-          <span><i style="background:var(--muted)"></i>Сьогодні зачинено</span>
+          <span><i style="background:var(--good)"></i><span id="legFree"></span></span>
+          <span><i style="background:var(--warn)"></i><span id="legFew"></span></span>
+          <span><i style="background:var(--crit)"></i><span id="legNone"></span></span>
+          <span><i style="background:var(--muted)"></i><span id="legClosed"></span></span>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-h"><div class="card-title" id="revTitle">Виручка</div></div>
+        <div class="card-h"><div class="card-title" id="revTitle"></div></div>
         <div class="chart">
           <div class="yaxis" id="yaxis"></div>
           <div class="plotwrap">
@@ -238,7 +238,7 @@
     </section>
 
     <section class="card" style="margin-top:18px">
-      <div class="card-h"><div class="card-title" id="tableTitle">Записи</div><button class="btn-ghost" id="tableBtn">Переглянути всі</button></div>
+      <div class="card-h"><div class="card-title" id="tableTitle"></div><button class="btn-ghost" id="tableBtn"></button></div>
       <div class="tablewrap">
         <table>
           <thead><tr id="thead"></tr></thead>
@@ -250,11 +250,11 @@
 
     <section class="card" style="margin-top:18px" id="msgCard" hidden>
       <div class="card-h">
-        <div class="card-title">Запити на зворотний дзвінок <span class="badge" id="msgCount" style="background:var(--primary-soft);color:var(--primary);margin-left:6px"></span></div>
+        <div class="card-title"><span id="msgTitle"></span> <span class="badge" id="msgCount" style="background:var(--primary-soft);color:var(--primary);margin-left:6px"></span></div>
       </div>
       <div class="tablewrap">
         <table>
-          <thead><tr><th id="msgWho">Клієнт</th><th>Телефон</th><th>Питання</th><th>Отримано</th></tr></thead>
+          <thead><tr><th id="msgWho"></th><th id="msgPhone"></th><th id="msgQuestion"></th><th id="msgReceived"></th></tr></thead>
           <tbody id="msgRows"></tbody>
         </table>
       </div>
@@ -273,30 +273,31 @@ const PALETTE = [
   ["#eef1ff", "#5566d8"], ["#e7f0fe", "#2f79d6"], ["#fff1e3", "#e08636"],
   ["#fde9e9", "#dc4b4b"], ["#e8f7ee", "#2f9e5e"], ["#f3ecfd", "#7b5bd6"],
 ];
-const MONTHS = ["січ.","лют.","бер.","квіт.","трав.","черв.","лип.","серп.","вер.","жовт.","лист.","груд."];
+let MONTHS = ["01","02","03","04","05","06","07","08","09","10","11","12"];  // replaced from the language pack
 const pad = (n) => String(n).padStart(2, "0");
 const fmtDate = (iso) => { const d = new Date(iso); return `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()}`; };
 const fmtTime = (iso) => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fmtRange = (a,b) => { const d1=new Date(a), d2=new Date(b); return `${d1.getDate()} ${MONTHS[d1.getMonth()]} – ${d2.getDate()} ${MONTHS[d2.getMonth()]} ${d2.getFullYear()}`; };
 const fmtCreated = (s) => { const d = new Date(s.replace(" ","T")); return `${fmtDate(d)}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
-let BIZ = { currency: "грн", is_slots: false, labels: {} };
+let BIZ = { currency: "", is_slots: false, labels: {} };
+let UI = {};   // labels from the business language pack (see dashboard.py)
 let RESOURCE_COLOR = {};
 
 function kpiMeta() {
   const cur = BIZ.currency;
   const meta = [
-    { key: "total_bookings", label: `${BIZ.labels.action || "Записів"} всього`, color: "#6c8cf5",
+    { key: "total_bookings", label: `${BIZ.labels.action || UI.records} ${UI.total_suffix}`, color: "#6c8cf5",
       icon: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>' },
-    { key: "total_revenue", label: `Виручка (${cur})`, color: "#22b07d",
+    { key: "total_revenue", label: `${UI.revenue} (${cur})`, color: "#22b07d",
       icon: '<rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M2 10h20"/><circle cx="17" cy="14" r="1.4"/>' },
   ];
   // «Гостей прийнято» має сенс лише там, де питають кількість людей.
   if (BIZ.labels.party) meta.push(
-    { key: "total_people", label: `${BIZ.labels.party} всього`, color: "#f0913a",
+    { key: "total_people", label: `${BIZ.labels.party} ${UI.total_suffix}`, color: "#f0913a",
       icon: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/>' });
   meta.push(
-    { key: "avg_check", label: `Середній чек (${cur})`, color: "#7c6cf0",
+    { key: "avg_check", label: `${UI.avg_check} (${cur})`, color: "#7c6cf0",
       icon: '<rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 9h20"/><path d="M6 15h4"/>' });
   return meta;
 }
@@ -305,11 +306,11 @@ function renderKPIs(kpi, deltas) {
   const box = document.getElementById("kpis"); box.innerHTML = "";
   for (const m of kpiMeta()) {
     const d = deltas[m.key];
-    let delta = '<span style="color:var(--muted)">немає даних за минулий період</span>';
+    let delta = `<span style="color:var(--muted)">${UI.no_previous}</span>`;
     if (d !== null && d !== undefined) {
       const cls = d >= 0 ? "up" : "down";
       const sign = d >= 0 ? "+" : "";
-      delta = `<span class="${cls}">${sign}${d}%</span> до попереднього періоду`;
+      delta = `<span class="${cls}">${sign}${d}%</span> ${UI.vs_previous}`;
     }
     box.appendChild(el(`
       <div class="kpi">
@@ -347,7 +348,7 @@ function renderChart(rows) {
   const grid = document.getElementById("grid"); grid.innerHTML = "";
   for (let i = 4; i >= 0; i--) {
     const val = step * i;
-    yaxis.appendChild(el(`<div>${val === 0 ? "0" : (val >= 1000 ? (val/1000)+" тис." : val)}</div>`));
+    yaxis.appendChild(el(`<div>${val === 0 ? "0" : (val >= 1000 ? (val/1000)+" "+UI.thousands : val)}</div>`));
     grid.appendChild(el(`<div class="gridline" style="top:${(1 - i/4)*100}%"></div>`));
   }
   const bars = document.getElementById("bars"); bars.innerHTML = "";
@@ -365,11 +366,11 @@ function renderChart(rows) {
 
 function tableColumns() {
   const L = BIZ.labels;
-  const cols = [`№`, L.customer || "Клієнт", "Телефон", L.resource || "Варіант"];
-  cols.push(BIZ.is_slots ? "Дата й час" : `Дати <span class="arrow">→</span>`);
-  cols.push(BIZ.is_slots ? "Тривалість" : L.unit || "Одиниць");
+  const cols = [`№`, L.customer || UI.customer, UI.phone, L.resource || UI.occupancy];
+  cols.push(BIZ.is_slots ? UI.datetime_col : `${UI.dates_col} <span class="arrow">→</span>`);
+  cols.push(BIZ.is_slots ? UI.duration : L.unit || UI.units);
   if (L.party) cols.push(L.party);
-  cols.push(`Сума (${BIZ.currency})`, "Створено");
+  cols.push(`${UI.amount} (${BIZ.currency})`, UI.created);
   return cols;
 }
 
@@ -383,7 +384,7 @@ function renderTable(bookings) {
       ? `${fmtDate(b.starts_at)}, ${fmtTime(b.starts_at)}`
       : `${fmtDate(b.starts_at)}<span class="arrow">→</span>${fmtDate(b.ends_at)}`;
     const amount = BIZ.is_slots
-      ? `${Math.round((new Date(b.ends_at) - new Date(b.starts_at)) / 60000)} хв`
+      ? `${Math.round((new Date(b.ends_at) - new Date(b.starts_at)) / 60000)} ${UI.minutes_short}`
       : b.units;
     const party = BIZ.labels.party ? `<td class="num">${b.party_size}</td>` : "";
     rows.appendChild(el(`
@@ -400,7 +401,7 @@ function renderTable(bookings) {
       </tr>`));
   }
   document.getElementById("tcount").textContent =
-    `Показано ${Math.min(bookings.length, 5)} з ${bookings.length}`;
+    `${UI.showing} ${Math.min(bookings.length, 5)} ${UI.of} ${bookings.length}`;
 }
 
 function renderMessages(messages) {
@@ -423,22 +424,51 @@ function renderMessages(messages) {
 function applyBusiness(biz) {
   BIZ = biz;
   const L = biz.labels || {};
-  document.getElementById("brandName").textContent = (biz.brand || "").toUpperCase();
-  document.getElementById("brandCity").textContent = biz.city || "";
-  document.getElementById("agentName").textContent = biz.agent;
-  document.getElementById("pillAgent").textContent = `${biz.agent} · онлайн`;
-  document.getElementById("navAction").textContent = L.action || "Записи";
-  document.getElementById("navResource").textContent = L.resource || "Варіанти";
-  document.getElementById("navCustomer").textContent = L.customer || "Клієнти";
-  document.getElementById("msgWho").textContent = L.customer || "Клієнт";
-  document.getElementById("occTitle").textContent = L.occupancy || "Завантаження";
-  document.getElementById("occCol").textContent = L.resource || "Варіант";
-  document.getElementById("revTitle").textContent = `Виручка (${biz.currency})`;
-  document.getElementById("tableTitle").textContent = L.action || "Записи";
-  document.getElementById("subTitle").textContent =
-    `Огляд роботи голосового агента · ${biz.brand}`;
-  document.title = `${biz.brand} · голосовий агент`;
+  UI = biz.ui || {};
+  if (UI.months_short) MONTHS = UI.months_short;
+
+  // Кожен підпис приходить із пакета мови закладу. Раніше вони були зашиті
+  // тут українською — англомовний заклад отримував англійського агента на
+  // телефоні й українську панель для власника.
+  const put = (id, text) => { const n = document.getElementById(id); if (n) n.textContent = text; };
+
+  put("brandName", (biz.brand || "").toUpperCase());
+  put("brandCity", biz.city || "");
+  put("agentName", biz.agent);
+  put("pillAgent", `${biz.agent} · ${(UI.agent_online || "").toLowerCase()}`);
+  put("pillAgentSub", `${UI.agent_role} ${UI.agent_active}`);
+  put("navCalls", UI.nav_calls);
+  put("navFinance", UI.nav_finance);
+  put("navSettings", UI.nav_settings);
+  put("occTotal", UI.total);
+  put("tableBtn", UI.view_all);
+  put("navOverview", UI.overview);
+  put("navAction", L.action || UI.records);
+  put("navResource", L.resource || UI.occupancy);
+  put("navCustomer", L.customer || UI.customer);
+  put("agentRole", UI.agent_role);
+  put("agentState", UI.agent_online);
+  put("agentSettings", UI.agent_settings);
+  put("pageTitle", UI.title);
+  put("updatedLabel", UI.updated);
+  put("occTitle", UI.occupancy);
+  put("occCol", L.resource || UI.occupancy);
+  put("occBusy", UI.occ_busy);
+  put("legFree", UI.free);
+  put("legFew", UI.few);
+  put("legNone", UI.none_left);
+  put("legClosed", UI.closed_today);
+  put("revTitle", `${UI.revenue} (${biz.currency})`);
+  put("tableTitle", L.action || UI.records);
+  put("msgTitle", UI.callbacks);
+  put("msgWho", L.customer || UI.customer);
+  put("msgPhone", UI.phone);
+  put("msgQuestion", UI.question);
+  put("msgReceived", UI.received);
+  put("subTitle", `${UI.subtitle} · ${biz.brand}`);
+  document.title = `${biz.brand} · ${(UI.agent_role || "").toLowerCase()}`;
 }
+
 
 async function load() {
   const r = await fetch("/api/stats");
@@ -446,7 +476,7 @@ async function load() {
   if (s.business) applyBusiness(s.business);
   s.by_resource.forEach((t, i) => { RESOURCE_COLOR[t.resource] = PALETTE[i % PALETTE.length]; });
   document.getElementById("pillRange").textContent = fmtRange(s.period_start, s.period_end);
-  document.getElementById("pillUpd").textContent = "щойно";
+  document.getElementById("pillUpd").textContent = UI.just_now;
   renderKPIs(s.kpi, s.deltas);
   renderOccupancy(s.by_resource);
   renderChart(s.by_resource);
