@@ -30,6 +30,7 @@ then open http://localhost:7860/client and hit Connect (allow the microphone).
 """
 
 import asyncio
+import json
 import os
 
 import aiohttp
@@ -37,6 +38,7 @@ import aiohttp
 import agent_tools
 import crm
 from business import BUSINESS, L, build_system_prompt, greeting_hint
+from call_metrics import CallMetrics, format_report
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.frames.frames import (
@@ -278,10 +280,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # ELEVENLABS_API_KEY the pipeline falls back to OpenAI.
     #
     # whole_reply synthesises the entire reply in one go, so intonation is built
-    # over the whole text rather than per sentence. The cost is that the bot
-    # stays silent until the model has finished writing. Turn it off with
-    # TTS_WHOLE_REPLY=0. Declared here because both the ElevenLabs branch and
-    # the pipeline assembly below need it.
+    # over the whole text rather than per sentence.
+    #
+    # It was assumed to cost around 0.7s of latency. Measured over three calls
+    # each way, it does not: 3.13s median wait with it against 3.43s without,
+    # which is inside the noise. The waiting the caller feels is dominated by
+    # the end-of-turn timer and by how long the model's reply is, and waiting
+    # for the last token fits inside that. The intonation is effectively free.
+    # Turn it off with TTS_WHOLE_REPLY=0 if you want to see for yourself.
     whole_reply = os.getenv("TTS_WHOLE_REPLY", "1") == "1"
 
     if elevenlabs_key:
@@ -394,6 +400,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         user_params=LLMUserAggregatorParams(user_turn_strategies=turn_strategies),
     )
 
+    def store_metrics(summary: dict) -> None:
+        """One row per call, so cost and latency can be looked at afterwards."""
+        logger.info("\n" + format_report(summary))
+        crm.log_event("call_metrics", json.dumps(summary, ensure_ascii=False, default=str))
+
     # Pipeline: audio in → [VAD] → STT → aggregator → LLM → TTS → audio out.
     # The VAD processor (for the ElevenLabs STT) must sit BEFORE the STT: its
     # VADUser* frames both commit the STT and feed the end-of-turn strategy
@@ -410,6 +421,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             tts,
             transport.output(),
             assistant_aggregator,
+            # Last on purpose. Every service pushes its metrics downstream, so
+            # anywhere earlier collects the frames of whatever happens to be
+            # above it — the first attempt sat before the STT and reported zeros
+            # for all three services. The end of the line sees the VAD's
+            # end-of-speech, the bot's start-of-speech and every metrics frame.
+            CallMetrics(on_finish=store_metrics),
         ]
     )
 

@@ -1,0 +1,32 @@
+# What the providers charge. Used only to turn measured usage into money.
+#
+# This is a FILE and not a constant on purpose: these rates end up in a README as
+# a claim about someone's margin, and a hard-coded number that quietly goes stale
+# is worse than no number. `checked` is the date they were last read off the
+# providers' own pricing pages — if it is old, treat the money as indicative and
+# the usage figures as the real output.
+#
+# Delete this file and the system still records usage; it just stops guessing at
+# cost.
+
+checked: 2026-08-10
+currency: USD
+
+rates:
+  # OpenAI gpt-4o-mini, per million tokens.
+  llm_input_per_mtok: 0.15
+  llm_output_per_mtok: 0.60
+
+  # ElevenLabs flash v2.5. Their plans are priced in credits per month rather
+  # than per character, so this is the Starter plan's effective rate: monthly
+  # price divided by the characters it includes. Recompute it for your own plan
+  # — on a bigger plan the per-character cost falls sharply.
+  tts_per_1k_chars: 0.15
+
+  # ElevenLabs Scribe realtime, per minute of audio.
+  stt_per_minute: 0.0067
+
+  # Inbound telephony, per minute. Zero here because the browser demo has no
+  # phone leg; a US number on Twilio is roughly this, and the number itself
+  # costs about a dollar a month on top.
+  telephony_per_minute: 0.0085
