@@ -1,25 +1,31 @@
-"""Текстовий eval голосового агента: ганяє діалогові сценарії проти реального OpenAI.
+"""Text-level evaluation: scripted dialogues run against the real model.
 
-Використовує ТОЙ САМИЙ системний промпт, ті самі tools і те саме сховище, що й
-bot.py. Різниця з живим дзвінком лише в тому, що немає STT/TTS — вхід/вихід
-текстом. Тому тут перевіряється ЛОГІКА (дати, ціни, підтвердження, tools), а не
-голос. Голосове (перебивання, шум, вимова) — тільки вручну через мікрофон.
+It uses THE SAME system prompt, the same tools and the same storage as bot.py.
+The only difference from a live call is that there is no STT or TTS — input and
+output are text. So what is checked here is the LOGIC (dates, prices,
+confirmations, tools), not the voice. Anything acoustic (interruptions, noise,
+pronunciation) can only be checked by hand through a microphone.
 
-Сценарії свої для кожного закладу: у готелю це інтервал діб, у клініки — час
-візиту й вільні вікна. Спільне ядро (промпт, інструменти, телефон) перевіряють
-обидва набори — саме так ловиться регресія від правки «під одну галузь».
+The scenarios differ per business: a hotel books a range of days, a clinic books
+a time and offers free slots. The shared core (prompt, tools, phone handling) is
+exercised by both sets — which is exactly how a regression from an
+"industry-specific" change gets caught.
 
-Використання:
-    python eval.py                       # усі сценарії активного закладу
-    python eval.py T3 T6                 # тільки вибрані
-    python eval.py --business clinic     # сценарії стоматології
-    python eval.py --business all        # всі заклади поспіль
+Usage:
+    python eval.py                       # every scenario for the active business
+    python eval.py T3 T6                 # selected ones only
+    python eval.py --business clinic     # the dental scenarios
+    python eval.py --business all        # every business in turn
 
-Потребує OPENAI_API_KEY у server/.env (кожен сценарій = кілька центів API).
-Тестові дані пишуться з ім'ям «…Тестовий» і чистяться до й після прогону.
+Requires OPENAI_API_KEY in server/.env (each scenario costs a few cents).
+Test records are written under a recognisable test name and cleaned up before
+and after the run.
 
-Дати в репліках рахуються від сьогодні й проговорюються словами — інакше eval
-протухає разом із захардкодженим липнем.
+Dates in the scripted lines are computed from today and spelled out in words,
+otherwise the evaluation rots along with a hard-coded month.
+
+TODO(locale): the scripted caller lines are Ukrainian because the configs are.
+English scenarios arrive with the English configs.
 """
 
 import json
@@ -29,7 +35,8 @@ import sqlite3
 import sys
 from datetime import date, timedelta
 
-# --business треба обробити ДО імпорту business.py: заклад обирається на імпорті.
+# --business has to be handled BEFORE importing business.py: the business is
+# selected at import time.
 _ARGV = sys.argv[1:]
 if "--business" in _ARGV:
     i = _ARGV.index("--business")
@@ -48,17 +55,17 @@ from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: 
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-# Ті самі параметри, що в bot.py: без них тест ганяє іншу модель поведінки, ніж
-# прод. Наочно: паралельні tool-call'и дають баг «після броні ще й заявка на
-# передзвін», якого в проді немає (там parallel_tool_calls вимкнено) — тест
-# стабільно падав на неіснуючій помилці.
+# The same settings as bot.py. Without them the test exercises a different
+# behaviour than production: parallel tool calls produce the "a callback request
+# on top of a booking" bug, which does not exist in production because parallel
+# calls are disabled there — so the test kept failing on a bug that was not real.
 AGENT_LLM = dict(temperature=0.6, parallel_tool_calls=False)
-MAX_STEPS = 30  # запобіжник від зациклення діалогу
+MAX_STEPS = 30  # a guard against the dialogue looping forever
 
 _digits = lambda s: re.sub(r"\D", "", s or "")  # noqa: E731
 
 
-# --------------------- дати й час словами (укр.) ---------------------
+# --------------------- dates and times in words ---------------------
 
 _ORD_GEN = [
     "", "першого", "другого", "третього", "четвертого", "п'ятого", "шостого",
@@ -83,24 +90,24 @@ _WEEKDAY_ACC = ["понеділок", "вівторок", "середу", "че�
 
 
 def say_day(d: date) -> str:
-    """«чотирнадцятого вересня»"""
+    """"the fourteenth of September" — a spoken date."""
     return f"{_ORD_GEN[d.day]} {_MONTH_GEN[d.month]}"
 
 
 def say_time(hour: int) -> str:
-    """«о десятій»"""
+    """"at ten" — a spoken time."""
     return f"о {_HOUR_LOC[hour]}"
 
 
 def next_weekday(weekday: int, min_days: int = 1) -> date:
-    """Найближчий майбутній день тижня (0 = понеділок)."""
+    """The next occurrence of a weekday (0 = Monday)."""
     d = date.today() + timedelta(days=min_days)
     while d.weekday() != weekday:
         d += timedelta(days=1)
     return d
 
 
-# ------------------------------ прогон ------------------------------
+# ------------------------------ the run ------------------------------
 
 
 def _cleanup() -> None:
@@ -129,11 +136,12 @@ def _messaged(log) -> bool:
 
 def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool,
                done=None) -> list[tuple]:
-    """Прогнати сценарій: скриптові репліки клієнта + авто-«так» на підтвердження.
+    """Run a scenario: scripted caller lines plus an automatic "yes".
 
-    Авто-підтвердження потрібне, бо кількість питань агента (телефон по цифрах,
-    повний переказ запису) може відрізнятись від кількості скриптових реплік.
-    Повертає лог викликів інструментів: [(name, args, result), ...].
+    The automatic confirmation is needed because the number of questions the
+    agent asks (repeating the phone number, the full summary before booking) can
+    differ from the number of scripted lines.
+    Returns the tool call log: [(name, args, result), ...].
     """
     messages = [{"role": "system", "content": build_system_prompt()}]
     tool_log: list[tuple] = []
@@ -178,7 +186,7 @@ def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool
     return tool_log
 
 
-# ------------------------ сценарії: готель (nights) ------------------------
+# ------------------------ scenarios: nights ------------------------
 
 H_IN = date.today() + timedelta(days=35)
 H_OUT = H_IN + timedelta(days=3)
@@ -285,18 +293,19 @@ HOTEL_SCENARIOS = {
 }
 
 
-# ------------------ сценарії: запис на час (slots) ------------------
+# ------------------ scenarios: slots ------------------
 
-# Найближчий вівторок — робочий день скрізь. Але в аварійки горизонт запису 7
-# днів, і в понеділок «наступний вівторок» опинявся за ним: сценарій падав на
-# «так далеко наперед не записуємо», а не на тому, що перевіряє.
+# The next Tuesday is a working day everywhere. But the emergency service has a
+# seven-day booking horizon, and on a Monday "next Tuesday" fell outside it: the
+# scenario failed on "we do not book that far ahead" rather than on what it is
+# meant to check.
 S_DAY = next_weekday(1, min_days=2)
 if (S_DAY - date.today()).days > BUSINESS.booking.horizon_days:
     S_DAY = date.today() + timedelta(days=1)
 S_HOUR = 10
 S_BUSY_HOUR = 12
 S_PHONE = "0677774567"
-#: Послуга, на яку записується C1 — ставиться у _slot_scenarios під кожну галузь.
+#: The service C1 books — set in _slot_scenarios for each industry.
 BOOK_FIRST = None
 BUSY_STUB = "Зайнято Тестовий"  # ім'я броні-заглушки, якою забиваємо годину в C2
 
@@ -331,7 +340,7 @@ def checks_c1(log) -> list[tuple[bool, str]]:
 
 
 def checks_c2(log) -> list[tuple[bool, str]]:
-    """Час зайнятий: агент мусить запропонувати альтернативу, а не вигадати місце."""
+    """The slot is taken: the agent must offer an alternative, not invent one."""
     busy = f"{S_DAY.isoformat()}T{S_BUSY_HOUR:02d}:00"
     offered = any(x[0] == "check_availability" and x[2].get("alternatives") for x in log)
     booked_busy = [b for b in _test_bookings()
@@ -359,8 +368,9 @@ def checks_c4(log) -> list[tuple[bool, str]]:
 
 
 def _closed_case(service_phrase: str) -> tuple[str, str]:
-    """Прохання на час, коли заклад зачинений. Який саме — залежить від графіка:
-    у клініки це неділя, у барбершопа (працює щодня) — пізній вечір."""
+    """A request for a time when the business is closed. Which one depends on the
+    schedule: for a clinic that is Sunday, for a barbershop open every day it is
+    late in the evening."""
     for ahead in range(1, 8):
         d = date.today() + timedelta(days=ahead)
         if BUSINESS.booking.hours_for(d) is None:
@@ -374,7 +384,7 @@ def _closed_case(service_phrase: str) -> tuple[str, str]:
             f"Запишіть мене на {service_phrase} {say_day(late)}, {say_time(22)}.",
             "Час після закриття: запис не створюється",
         )
-    # Цілодобовий заклад — «зачинено» не буває. Б'ємо в іншу межу: горизонт.
+    # A 24/7 business is never closed, so aim at a different boundary: horizon.
     far = date.today() + timedelta(days=BUSINESS.booking.horizon_days + 25)
     return (
         f"Запишіть мене на {service_phrase} {say_day(far)}, {say_time(11)}.",
@@ -384,10 +394,11 @@ def _closed_case(service_phrase: str) -> tuple[str, str]:
 
 def _slot_scenarios(service_phrase: str, expect_key: str, busy_service: str,
                     busy_key: str, offtopic: str, extra: str = "") -> dict:
-    """Той самий кістяк для будь-якого закладу, що записує на час.
+    """The same skeleton for any business that books appointments by time.
 
-    extra — реплика з даними, які вимагає опитування галузі (адреса тощо):
-    без них create_booking законно відмовить, і сценарій перевірятиме не те.
+    `extra` is a line carrying whatever the industry intake requires (an address
+    and so on): without it create_booking legitimately refuses and the scenario
+    would be testing the wrong thing.
     """
     global BOOK_FIRST
     BOOK_FIRST = BUSINESS.booking.resource(expect_key)
@@ -423,8 +434,8 @@ def _slot_scenarios(service_phrase: str, expect_key: str, busy_service: str,
     }
 
 
-# Набір сценаріїв будується для АКТИВНОГО закладу: _slot_scenarios чіпляється до
-# BUSINESS (опитування, графік, ресурси), тому зібрати всі п'ять одночасно не можна.
+# The scenario set is built for the ACTIVE business: _slot_scenarios reaches into
+# BUSINESS (intake, hours, resources), so all five cannot be assembled at once.
 _SLOT_VERTICALS = {
     "clinic": dict(
         service_phrase="професійну чистку", expect_key="cleaning", busy_service="видалити зуб", busy_key="extraction",
@@ -453,16 +464,18 @@ if BUSINESS.key in _SLOT_VERTICALS:
 
 
 def _prepare_busy(resource_key: str) -> None:
-    """Забити годину, яку в C2 попросить клієнт — стільки разів, скільки місць.
+    """Fill the hour C2's caller will ask for, as many times as there is capacity.
 
-    Ресурс задаємо ключем, а не фразою: розмовну форму («прибрати трикімнатну»)
-    словник синонімів може й не впізнати, і тоді сценарій тихо перевіряв би не те.
+    The resource is given by key rather than by phrase: a conversational form
+    might not be recognised by the alias list, and then the scenario would
+    quietly be testing something else.
     """
     res = BUSINESS.booking.resource(resource_key)
     assert res, f"немає ресурсу {resource_key} у {BUSINESS.key}"
     for _ in range(res.capacity):
-        # Обов'язкові поля галузі підставляємо й тут: без адреси клінінг законно
-        # відмовить, заглушка не створиться, і C2 тихо перевірятиме вільну годину.
+        # The industry's mandatory fields are supplied here too: without an
+        # address a cleaning booking is legitimately refused, the stub would not
+        # be created, and C2 would quietly be checking a free hour.
         out = crm.create_booking(
             resource=res.label,
             start=f"{S_DAY.isoformat()}T{S_BUSY_HOUR:02d}:00",
@@ -503,7 +516,7 @@ def run_business(key: str, names: list[str]) -> dict[str, list[tuple[bool, str]]
 def main() -> int:
     names = [n.upper() for n in _ARGV]
     if _BUSINESS_ARG == "all":
-        # кожен заклад — окремий процес: конфіг фіксується на імпорті
+        # one process per business: the config is fixed at import time
         import subprocess
 
         failed = 0

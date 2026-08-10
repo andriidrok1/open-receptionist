@@ -1,12 +1,15 @@
-"""Наповнити базу закладу демо-записами — щоб дашборд виглядав живим для показу.
+"""Fill a business database with demo records, so the dashboard looks alive.
 
-Запуск:
-    python seed_demo.py                    # готель: ~130 броней за ~65 днів
-    BUSINESS=clinic python seed_demo.py    # стоматологія: візити по сітці годин
-    python seed_demo.py --keep             # не чистити, лише додати
+Running it:
+    python seed_demo.py                    # ~130 bookings over ~65 days
+    BUSINESS=clinic python seed_demo.py    # appointments on the slot grid
+    python seed_demo.py --keep             # add without clearing first
 
-Дані реалістичні, але вигадані. Для реального клієнта просто не запускай цей
-скрипт — дашборд рахує з тих записів, що створив голосовий агент.
+The data is realistic but invented. For a real client, simply do not run this
+script — the dashboard counts the records the voice agent actually created.
+
+TODO(locale): the name lists below are Ukrainian; an English business needs its
+own, which is one more thing the language pack should carry.
 """
 
 import argparse
@@ -18,7 +21,7 @@ from datetime import date, datetime, timedelta
 import crm
 from business import BUSINESS, slot_grid
 
-random.seed(42)  # відтворюваність
+random.seed(42)  # reproducibility
 
 FIRST = [
     "Андрій", "Олена", "Ігор", "Марія", "Юлія", "Олександр", "Наталія", "Дмитро",
@@ -32,8 +35,9 @@ LAST = [
 ]
 
 BOOK = BUSINESS.booking
-# Перші позиції прайсу замовляють частіше за останні — інакше графік виручки
-# виходить рівний, а рівний графік на демо виглядає як заглушка.
+# The first items on the price list are ordered more often than the last ones,
+# otherwise the revenue chart comes out flat — and a flat chart in a demo reads
+# as a placeholder.
 WEIGHTS = [0.40, 0.32, 0.20, 0.08, 0.05, 0.03][: len(BOOK.resources)]
 
 
@@ -43,7 +47,7 @@ def _phone() -> str:
 
 
 def _slot_span(created: datetime) -> tuple[str, str, int] | None:
-    """Випадковий вільний за графіком візит поблизу дати створення."""
+    """A random appointment that is free per the schedule, near the created date."""
     res = random.choices(BOOK.resources, weights=WEIGHTS)[0]
     for _ in range(20):
         day = created.date() + timedelta(days=random.randint(0, 14))
@@ -66,7 +70,7 @@ def _slot_span(created: datetime) -> tuple[str, str, int] | None:
 def _nights_span(created: datetime) -> tuple[tuple[str, str, int], str]:
     res = random.choices(BOOK.resources, weights=WEIGHTS)[0]
     nights = random.randint(1, 5)
-    # ~40% — майбутні брони (щоб була завантаженість), решта — історія.
+    # ~40% are future bookings (so occupancy is not empty), the rest is history.
     if random.random() < 0.4:
         check_in = date.today() + timedelta(days=random.randint(0, 30))
     else:
@@ -114,15 +118,15 @@ def seed(n: int, keep: bool) -> None:
 
     total = crm.stats()
     print(
-        f"{BUSINESS.key}: засіяно {made} записів у {crm.DB_PATH.name}. "
-        f"За період: {total['kpi']['total_bookings']}, "
-        f"виручка {total['kpi']['total_revenue']} {BUSINESS.currency}"
+        f"{BUSINESS.key}: seeded {made} records into {crm.DB_PATH.name}. "
+        f"In period: {total['kpi']['total_bookings']}, "
+        f"revenue {total['kpi']['total_revenue']} {BUSINESS.currency}"
     )
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--keep", action="store_true", help="не чистити наявні записи")
-    ap.add_argument("-n", type=int, default=130, help="скільки записів згенерувати")
+    ap.add_argument("--keep", action="store_true", help="do not clear existing records")
+    ap.add_argument("-n", type=int, default=130, help="how many records to generate")
     args = ap.parse_args()
     seed(args.n, args.keep)

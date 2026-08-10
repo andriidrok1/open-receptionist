@@ -1,16 +1,17 @@
-"""demo.py — вітрина: сторінка, з якої можна подзвонити боту будь-якої галузі.
+"""demo.py — the showcase: a page you can call any of the bots from.
 
-Це інструмент продажу, а не наш стенд: друг кидає посилання власнику бізнесу,
-той відкриває з телефона, обирає свою галузь і говорить з ботом. Тому сторінка
-українською, без реєстрації і з підказками, що казати.
+This is a sales tool, not our test bench: you send the link to a business owner,
+they open it on a phone, pick their industry and talk to the bot. Hence no
+registration, and hints about what to say.
 
-Запуск — через `run_demo.py`, який піднімає ще й ботів. Окремо:
-    python demo.py            # тільки вітрина, боти мають бути підняті самі
+Normally started through `run_demo.py`, which also brings the bots up. On its own:
+    python demo.py            # showcase only; the bots must already be running
 
-Чому вітрина окремо від ботів: один процес бота обслуговує один заклад
-(`BUSINESS` фіксується на імпорті). Для п'яти вкладок піднімаємо п'ять процесів
-на сусідніх портах, а ця сторінка лише знає, куди стукати. Переробляти вибір
-закладу на пер-сесію заради демо — міняти працююче ядро без потреби.
+Why the showcase is separate from the bots: one bot process serves one business
+(`BUSINESS` is fixed at import time). For five tabs we run five processes on
+adjacent ports, and this page only needs to know where to knock. Reworking the
+business selection to be per-session, just for a demo, would mean changing a
+working core for no reason.
 """
 
 import os
@@ -26,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
 
-#: Порядок вкладок = порядок цього списку. Перша — та, що відкриється одразу.
+#: Tab order = the order of this list. The first one opens by default.
 DEMO_BUSINESSES = ["clinic", "emergency", "cleaning", "hotel", "barbershop"]
 
 BASE_PORT = int(os.getenv("DEMO_BASE_PORT", "7860"))
@@ -39,7 +40,7 @@ def bot_port(key: str) -> int:
 
 
 def demo_db(key: str) -> Path:
-    """Окрема база на кожну галузь — щоб демо не змішувалось із робочими даними."""
+    """A separate database per industry, so demos never mix with real data."""
     return HERE / f"demo_{key}.db"
 
 
@@ -50,6 +51,7 @@ def _resource_rows(biz) -> list[dict]:
             {
                 "label": r.label,
                 "price": r.price,
+                # TODO(locale): shown on the demo card, needs the language pack.
                 "note": r.note or (
                     f"{r.duration_min} хв"
                     if biz.booking.is_slots and r.duration_min
@@ -81,11 +83,11 @@ def _card(key: str) -> dict:
     }
 
 
-#: Читаємо конфіги один раз на старті — вони не змінюються під час показу.
+#: Configs are read once at startup — they do not change during a demo.
 CARDS = [_card(k) for k in DEMO_BUSINESSES if (HERE / "businesses" / f"{k}.yaml").exists()]
 
-app = FastAPI(title="voice-receptionist · demo")
-# /static — зібраний бандл офіційного SDK pipecat (див. client/).
+app = FastAPI(title="open-receptionist · demo")
+# /static holds the bundled official pipecat SDK (see client/).
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -101,23 +103,23 @@ def api_businesses() -> JSONResponse:
 
 @app.get("/api/now")
 def api_now() -> JSONResponse:
-    """Час за годинником сервера у тому ж форматі, що created_at у базі.
+    """Server time, in the same format the database stamps created_at with.
 
-    Сторінка позначає ним початок дзвінка. Брати час із браузера не можна:
-    годинник телефона легко відстає на хвилини, і тоді «що з'явилось у системі
-    за цю розмову» промахується — власник бачить «нічого не записано» одразу
-    після того, як бот вголос назвав номер броні.
+    The page marks the start of a call with it. Taking the time from the browser
+    does not work: a phone's clock is easily minutes out, and then "what
+    appeared in the system during this call" misses — the owner is told nothing
+    was recorded right after the bot read out a booking reference.
     """
     return JSONResponse({"utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.get("/api/activity/{key}")
 def api_activity(key: str, since: str = "") -> JSONResponse:
-    """Що з'явилось у базі закладу після початку дзвінка.
+    """What appeared in the business's database after the call started.
 
-    Читаємо базу напряму, а не через crm: crm прив'язаний до одного закладу на
-    процес, а вітрині треба заглядати в усі п'ять. Запит один і той самий для
-    будь-якої галузі — схема ж спільна.
+    We read the database directly rather than through crm: crm is bound to one
+    business per process, while the showcase needs to look into all five. The
+    query is the same for every industry — the schema is shared.
     """
     path = demo_db(key)
     if key not in DEMO_BUSINESSES or not path.exists():
@@ -152,7 +154,7 @@ def api_activity(key: str, since: str = "") -> JSONResponse:
             )
         ]
     except sqlite3.OperationalError:
-        bookings, messages, events = [], [], []  # база ще порожня, таблиць немає
+        bookings, messages, events = [], [], []  # empty database, no tables yet
     finally:
         conn.close()
 

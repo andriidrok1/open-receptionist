@@ -1,33 +1,38 @@
-"""simulate.py — симулятор дзвінків: LLM-клієнт розмовляє з нашим агентом.
+"""simulate.py — a call simulator: one model plays the caller, ours answers.
 
-Навіщо окремо від eval.py. Там сценарії скриптові: заздалегідь відомі репліки,
-заздалегідь відомий результат. Це ловить регресії, але не ловить того, що
-ламається в реальному дзвінку — коли людина мимрить, передумує, називає дату,
-яка вже минула, або мовчить про адресу, доки не спитають двічі.
+Why this exists next to eval.py. There the scenarios are scripted: known lines,
+known outcome. That catches regressions, but not what actually breaks on a real
+call — when someone mumbles, changes their mind, names a date that has already
+passed, or says nothing about their address until asked twice.
 
-Тут клієнта грає окрема модель зі своїм характером і набором фактів про себе.
-Вона НЕ знає, як влаштований наш агент, і поводиться як людина на телефоні.
+Here the caller is played by a separate model with its own character and its own
+set of facts about itself. It does NOT know how our agent works, and behaves
+like a person on the phone.
 
-Головне не діалог, а перевірки. Вони не залежать від сценарію і ловлять клас
-помилок «агент щось вигадав»:
+The dialogue is not the point; the checks are. They do not depend on the
+scenario, and they catch the class of failures where the agent invented
+something:
 
-    - записав дані, яких клієнт не називав (адресу з прикладу в промпті);
-    - запропонував час, якого не повертав інструмент;
-    - створив запис на слот, що не проходив успішної перевірки;
-    - після вдалого запису ще й завів заявку на дзвінок;
-    - зациклився: питає те саме втретє.
+    - it passed on data the caller never gave (an address from a prompt example);
+    - it offered a time no tool ever returned;
+    - it booked a slot that never passed a successful check;
+    - it filed a callback request on top of a completed booking;
+    - it looped, asking the same question a third time.
 
-Кожна з них — реальний баг, спійманий у живому дзвінку. Тепер вони ловляться
-без голосу, за копійки й за хвилину.
+Every one of those is a real bug caught on a live call. Now they are caught
+without a voice, for pennies, in a minute.
 
-Використання:
-    python simulate.py                       # усі персони активного закладу
-    python simulate.py --business cleaning   # інший заклад
-    python simulate.py mumbler past_date     # тільки вибрані
-    python simulate.py --list                # перелік персон
-    python simulate.py --show                # друкувати діалоги повністю
+Usage:
+    python simulate.py                       # every persona for this business
+    python simulate.py --business cleaning   # a different business
+    python simulate.py mumbler past_date     # selected personas only
+    python simulate.py --list                # list the personas
+    python simulate.py --show                # print the dialogues in full
 
-Потребує OPENAI_API_KEY. Один прогін персони — кілька центів.
+Requires OPENAI_API_KEY. One persona costs a few cents.
+
+TODO(locale): the personas speak Ukrainian because the configs do. English
+personas arrive with the English configs.
 """
 
 import json
@@ -48,9 +53,9 @@ SHOW = "--show" in _ARGV
 if SHOW:
     _ARGV.remove("--show")
 
-# Симуляція чистить базу перед кожною персоною — і робила це в БОЙОВІЙ базі
-# закладу, разом із демо-даними, на яких стоїть дашборд. Тимчасова база має
-# бути обрана ДО імпорту crm: він фіксує шлях на імпорті.
+# The simulation clears the database before every persona — and it used to do
+# that in the REAL database of the business, demo data and all. The temporary
+# database has to be chosen BEFORE importing crm, which fixes the path at import.
 os.environ.setdefault(
     "CRM_DB", str(Path(tempfile.gettempdir()) / f"simulate_{os.environ.get('BUSINESS', 'hotel')}.db")
 )
@@ -65,17 +70,17 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 CALLER_MODEL = os.getenv("SIMULATE_CALLER_MODEL", "gpt-4o-mini")
 MAX_TURNS = 14
 
-# Ті самі параметри, що в bot.py: без них тест ганяє іншу модель поведінки, ніж
-# прод. Наочно: паралельні tool-call'и дають баг «після броні ще й заявка на
-# передзвін», якого в проді немає (там parallel_tool_calls вимкнено) — тест
-# стабільно падав на неіснуючій помилці.
+# The same settings as bot.py. Without them the test exercises a different
+# behaviour than production: parallel tool calls produce the "a callback request
+# on top of a booking" bug, which does not exist in production because parallel
+# calls are disabled there — so the test kept failing on a bug that was not real.
 AGENT_LLM = dict(temperature=0.6, parallel_tool_calls=False)
 
 BOOK = BUSINESS.booking
 _digits = lambda s: re.sub(r"\D", "", s or "")  # noqa: E731
 
 
-# ------------------------------- персони -------------------------------
+# ------------------------------- personas -------------------------------
 
 def _future(days: int) -> str:
     return (date.today() + timedelta(days=days)).isoformat()
@@ -174,7 +179,7 @@ def caller_prompt(p: dict) -> str:
 - Ніяких пояснень «як модель». Тільки репліка клієнта."""
 
 
-# ------------------------------- прогін -------------------------------
+# ------------------------------- the run -------------------------------
 
 def _cleanup() -> None:
     conn = sqlite3.connect(crm.DB_PATH)
@@ -188,18 +193,18 @@ def _cleanup() -> None:
 
 
 def run_call(client: OpenAI, tools: list, persona: dict) -> dict:
-    """Провести дзвінок. Повертає стенограму й лог інструментів."""
+    """Run one call. Returns the transcript and the tool log."""
     agent_msgs = [{"role": "system", "content": build_system_prompt()}]
     caller_msgs = [{"role": "system", "content": caller_prompt(persona)}]
     transcript: list[tuple[str, str]] = []
     tool_log: list[tuple] = []
 
-    # Першим говорить агент — так само, як у справжньому дзвінку.
+    # The agent speaks first, exactly as on a real call.
     agent_msgs.append({"role": "developer", "content":
                        f"Привітайся першою, дуже коротко, як {BUSINESS.persona}."})
 
     for _ in range(MAX_TURNS):
-        # --- хід агента (може містити виклики інструментів) ---
+        # --- the agent's turn (may contain tool calls) ---
         for _ in range(6):
             resp = client.chat.completions.create(
                 model=MODEL, messages=agent_msgs, tools=tools, tool_choice="auto",
@@ -220,7 +225,7 @@ def run_call(client: OpenAI, tools: list, persona: dict) -> dict:
         transcript.append(("agent", agent_text))
         caller_msgs.append({"role": "user", "content": agent_text})
 
-        # --- хід клієнта ---
+        # --- the caller's turn ---
         cres = client.chat.completions.create(model=CALLER_MODEL, messages=caller_msgs)
         caller_text = (cres.choices[0].message.content or "").strip()
         caller_msgs.append({"role": "assistant", "content": caller_text})
@@ -235,21 +240,22 @@ def run_call(client: OpenAI, tools: list, persona: dict) -> dict:
     return {"transcript": transcript, "tools": tool_log}
 
 
-# ----------------------------- перевірки -----------------------------
+# ----------------------------- the checks -----------------------------
 #
-# Кожна повертає список порушень (порожній список = все добре).
+# Each returns a list of violations (an empty list means all is well).
 
 def _caller_said(transcript) -> str:
     return " ".join(t for who, t in transcript if who == "caller").lower()
 
 
 def check_no_fabricated_data(run) -> list[str]:
-    """Агент не має передавати в інструменти те, чого клієнт не казав."""
+    """The agent must not pass tools anything the caller never said."""
     said = _caller_said(run["transcript"])
     said_digits = _digits(said)
     bad = []
     for name, args, res in run["tools"]:
-        # Відхилена спроба — це спрацював запобіжник, а не брак у базі.
+        # A rejected attempt means the guard worked, not that the database is
+        # wrong — so only successful calls are inspected.
         if name not in ("create_booking", "take_message") or not res.get("success"):
             continue
         phone = _digits(args.get("phone"))
@@ -259,7 +265,7 @@ def check_no_fabricated_data(run) -> list[str]:
             val = (args.get(field) or "").strip()
             if not val:
                 continue
-            # Достатньо, щоб прозвучало хоч одне змістовне слово зі значення.
+            # One meaningful word from the value having been spoken is enough.
             words = [w for w in re.findall(r"[\w']{4,}", val.lower())]
             if words and not any(w[:5] in said for w in words):
                 bad.append(f"{name}: «{field}» = {val!r} — такого в розмові не було")
@@ -272,7 +278,7 @@ def _slot_key(args: dict) -> tuple:
 
 
 def check_booked_over_refusal(run) -> list[str]:
-    """Спроба записати на слот, який інструмент щойно назвав недоступним."""
+    """An attempt to book a slot the tool has just reported as unavailable."""
     refused = set()
     bad = []
     for name, args, res in run["tools"]:
@@ -285,12 +291,12 @@ def check_booked_over_refusal(run) -> list[str]:
 
 
 def warn_unverified_slot(run) -> list[str]:
-    """Запис на слот, який жодного разу не перевіряли.
+    """A booking on a slot that was never checked.
 
-    Не помилка: crm перевіряє наявність ще раз перед вставкою, тож
-    переброні не станеться. Але агент при цьому називає час і ціну, яких не
-    підтверджував — і якщо слот виявиться зайнятим, доведеться переігрувати
-    вже домовлений запис просто на очах у клієнта.
+    Not an error: crm re-checks availability before the insert, so no double
+    booking can happen. But the agent is naming a time and a price it never
+    confirmed — and if the slot turns out to be taken, an already agreed booking
+    has to be renegotiated in front of the caller.
     """
     ok = set()
     warn = []
@@ -315,7 +321,7 @@ def check_no_message_after_booking(run) -> list[str]:
 
 
 def check_no_loop(run) -> list[str]:
-    """Агент не має ставити те саме питання тричі."""
+    """The agent must not ask the same question three times."""
     seen: dict[str, int] = {}
     for who, text in run["transcript"]:
         if who != "agent":
@@ -329,7 +335,7 @@ def check_no_loop(run) -> list[str]:
 
 
 def check_no_success_claim_on_error(run) -> list[str]:
-    """Якщо запис не вдався, агент не має казати, що записав."""
+    """If the booking failed, the agent must not claim it succeeded."""
     ok = any(n == "create_booking" and r.get("success") for n, _, r in run["tools"])
     tried = any(n == "create_booking" for n, _, _ in run["tools"])
     if ok or not tried:

@@ -1,19 +1,27 @@
-"""business.py — опис закладу, який агент обслуговує в цьому дзвінку.
+"""business.py — the description of the business this call is being served for.
 
-Ядро агента (голос, пайплайн, паузи, телефонія, робота з телефонами гостей) до
-галузі стосунку не має — воно однакове для готелю, стоматології й барбершопа.
-Усе галузеве живе в YAML у `businesses/`: персона, знання про заклад, перелік
-ресурсів із цінами, графік роботи. Новий заклад = новий YAML, код не чіпаємо.
+The agent's core (voice, pipeline, pauses, telephony, handling phone numbers)
+has nothing to do with any industry — it is the same for a hotel, a dental
+practice and a barbershop. Everything industry-specific lives in a YAML file
+under `businesses/`: the persona, what the agent knows about the place, the list
+of resources with prices, the opening hours. A new business is a new YAML; the
+code is not touched.
 
-Активний заклад обирається змінною оточення:
+The active business is chosen by environment variable:
     BUSINESS=clinic            → businesses/clinic.yaml
-    BUSINESS_CONFIG=/шлях.yaml → довільний файл (для клієнта поза репозиторієм)
+    BUSINESS_CONFIG=/path.yaml → any file (a specific client's config, kept
+                                 outside the repository)
 
-Дві моделі часу покривають майже весь ресепшн:
-    nights — бронь на інтервал діб (готель, апартаменти, оренда).
-    slots  — запис на конкретний час фіксованої тривалості (клініка, барбершоп,
-             СТО, репетитор).
-Обидві зводяться до одного: ресурс зайнятий на проміжку [start, end).
+Two time models cover almost every receptionist:
+    nights — a booking over a range of days (hotel, apartments, rentals).
+    slots  — an appointment at a specific time of a fixed length (clinic,
+             barbershop, garage, tutor).
+Both reduce to the same thing: a resource is occupied over [start, end).
+
+Note on language: the functions that build the system prompt return text the
+model reads, so it stays in the business's language until the locale layer
+lands — those strings are the future contents of locales/uk.yaml. Everything
+only humans read is in English.
 """
 
 from __future__ import annotations
@@ -27,33 +35,36 @@ from zoneinfo import ZoneInfo
 import yaml
 from dotenv import load_dotenv
 
-# Явно вказаний у команді заклад мусить бути сильнішим за .env: інакше
-# `BUSINESS=clinic python bot.py` мовчки підіймає готель, бо load_dotenv нижче
-# йде з override=True. Тому запам'ятовуємо вибір ДО читання файлу.
+# A business named explicitly on the command line has to win over .env,
+# otherwise `BUSINESS=clinic python bot.py` silently starts the hotel, because
+# load_dotenv below runs with override=True. Hence: remember the choice BEFORE
+# reading the file.
 _CLI_BUSINESS = os.environ.get("BUSINESS")
 _CLI_CONFIG = os.environ.get("BUSINESS_CONFIG")
 
-# .env читаємо тут, а не в bot.py: вибір закладу відбувається на імпорті цього
-# модуля — тобто раніше, ніж bot.py встиг би підвантажити змінні.
-# Шлях явний: без нього load_dotenv падає, коли модуль запускають не з server/.
+# .env is read here rather than in bot.py: the business is selected when this
+# module is imported, which is earlier than bot.py could load the variables.
+# The path is explicit — without it load_dotenv fails when the module is run
+# from somewhere other than server/.
 load_dotenv(Path(__file__).parent / ".env", override=True)
 
 BUSINESSES_DIR = Path(__file__).parent / "businesses"
 
-#: Ліміт ElevenLabs Scribe на довжину одного keyterm.
-MAX_KEYTERM_LEN = 20  # ліміт ElevenLabs Scribe на один keyterm (у символах)
-MAX_KEYTERMS = 50  # і на весь список; на перевищенні сокет рветься з 1008
+MAX_KEYTERM_LEN = 20  # ElevenLabs Scribe's limit for one keyterm, in characters
+MAX_KEYTERMS = 50  # and for the whole list; exceeding it closes the socket (1008)
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# TODO(locale): weekday names move to the language pack.
 WEEKDAYS_UK = ("понеділок", "вівторок", "середа", "четвер", "п'ятниця", "субота", "неділя")
 
 
 @dataclass(frozen=True)
 class Resource:
-    """Те, що бронюють: тип номера, послуга, майстер, пост на СТО.
+    """The thing being booked: a room type, a service, a chair, a service bay.
 
-    capacity — скільки таких одиниць можна зайняти ОДНОЧАСНО (номерів у готелі,
-    крісел у барбершопі, лікарів на цю послугу). Саме вона тримає овербукінг.
+    capacity is how many of them can be occupied AT THE SAME TIME (rooms in a
+    hotel, chairs in a barbershop, dentists covering this service). That is what
+    holds overbooking back.
     """
 
     key: str
@@ -61,17 +72,18 @@ class Resource:
     aliases: tuple[str, ...] = ()
     price: int = 0
     capacity: int = 1
-    duration_min: int = 0  # лише для slots
+    duration_min: int = 0  # slots only
     note: str = ""
 
 
 @dataclass(frozen=True)
 class IntakeField:
-    """Що ще треба спитати, крім часу й імені.
+    """What else to ask about, besides the time and the name.
 
-    Виїзні послуги (клінінг, аварійка, замір на ремонт) без адреси безглузді:
-    запис є, а куди їхати — невідомо. Набір полів у кожної галузі свій, тому
-    він живе в YAML і звідти ж потрапляє і в промпт, і в схему інструмента.
+    A visit-your-place service (cleaning, an emergency plumber, someone coming
+    to measure up) is meaningless without an address: the appointment exists but
+    nobody knows where to go. The set of fields differs per industry, so it
+    lives in the YAML and from there reaches both the prompt and the tool schema.
     """
 
     key: str
@@ -82,17 +94,17 @@ class IntakeField:
 
 @dataclass(frozen=True)
 class BookingConfig:
-    """Як саме цей заклад приймає записи."""
+    """How this particular business takes bookings."""
 
     enabled: bool = True
     granularity: str = "nights"  # nights | slots
-    action: str = "бронювання"  # «бронювання» / «запис» — вживається в промпті
-    action_gen: str = "бронювання"  # родовий відмінок: «поза межами бронювання/запису»
+    action: str = "бронювання"  # "booking" / "appointment" — used in the prompt
+    action_gen: str = "бронювання"  # genitive form: "outside of booking"
     verb: str = "забронювати"
-    resource_param: str = "resource"  # ім'я аргументу в tool-схемі (room_type/service)
+    resource_param: str = "resource"  # argument name in the tool schema
     resource_label: str = "варіант"
-    unit: str = "ніч"  # одиниця тарифікації для nights
-    start_label: str = "дата початку"  # nights: як називати межі інтервалу
+    unit: str = "ніч"  # the billing unit for nights
+    start_label: str = "дата початку"  # nights: what to call the bounds
     end_label: str = "дата завершення"
     ask_party: bool = False
     party_param: str = "party_size"
@@ -116,7 +128,7 @@ class BookingConfig:
         return None
 
     def normalize_resource(self, raw: str | None) -> str | None:
-        """Усна назва (укр./рос./англ., з відмінками) → канонічний ключ."""
+        """A spoken name (in any case or wording) → the canonical key."""
         if not raw:
             return None
         needle = raw.strip().lower()
@@ -124,7 +136,7 @@ class BookingConfig:
             variants = {r.key.lower(), r.label.lower(), *(a.lower() for a in r.aliases)}
             if needle in variants:
                 return r.key
-        # м'який збіг: «стандартний номер», «на чистку зубів»
+        # Loose match: "a standard room", "to have my teeth cleaned"
         for r in self.resources:
             for v in (r.label.lower(), *(a.lower() for a in r.aliases)):
                 if v and (v in needle or needle in v):
@@ -132,7 +144,7 @@ class BookingConfig:
         return None
 
     def hours_for(self, day: date) -> tuple[time, time] | None:
-        """Робочі години на конкретний день. None — вихідний."""
+        """Opening hours for a specific day. None means closed."""
         raw = self.hours.get(WEEKDAYS[day.weekday()])
         if not raw:
             return None
@@ -140,14 +152,16 @@ class BookingConfig:
         return time.fromisoformat(start_s.strip()), time.fromisoformat(end_s.strip())
 
     def is_round_clock(self, day: date) -> bool:
-        """Цілодобовий день. Потрібне аварійці: виклик о 23:30 не має впиратись
-        у «не встигає до закриття» — саме вночі такі дзвінки й бувають."""
+        """Whether the day is 24/7. Needed by the emergency plumber: a call at
+        23:30 must not run into "that will not fit before we close" — the middle
+        of the night is exactly when such calls happen."""
         h = self.hours_for(day)
         return bool(h) and h[0] == time(0, 0) and h[1] >= time(23, 59)
 
     def hours_compact(self) -> str:
-        """Графік для картки: «пн–пт 09:00–19:00 · сб 10:00–15:00 · нд вихідний».
-        Сусідні однакові дні склеюються — інакше виходить простирадло на сім рядків."""
+        """Opening hours for the demo card: "mon–fri 09:00–19:00 · sun closed".
+        Adjacent identical days are merged, otherwise it becomes a seven-line
+        wall of text."""
         if not self.hours:
             return ""
         short = ("пн", "вт", "ср", "чт", "пт", "сб", "нд")
@@ -166,7 +180,7 @@ class BookingConfig:
         )
 
     def hours_human(self) -> str:
-        """Графік одним рядком — для промпта («пн–пт 09:00–19:00, сб 10:00–16:00»)."""
+        """Opening hours on one line — for the prompt."""
         parts = []
         for i, key in enumerate(WEEKDAYS):
             raw = self.hours.get(key)
@@ -177,34 +191,35 @@ class BookingConfig:
 @dataclass(frozen=True)
 class Business:
     key: str
-    name: str  # як агент називає заклад уголос
-    brand: str  # як підписаний дашборд
+    name: str  # how the agent says the name of the place out loud
+    brand: str  # how the dashboard is labelled
     city: str
     agent_name: str
-    persona: str  # «адміністратор на ресепшені»
+    persona: str  # "the receptionist at a dental practice"
     tone: str
     currency: str
-    customer: tuple[str, str, str]  # гість / гостя / гостю (наз., род., дав.)
+    customer: tuple[str, str, str]  # guest / patient / customer, in three cases
     knowledge: str
     speech_bad: str
     speech_good: str
-    speech_recap: str  # як звучить переказ запису перед підтвердженням
+    speech_recap: str  # how the summary before confirmation should sound
     escalation_examples: str
     keyterms: tuple[str, ...]
-    demo_tab: str  # коротка назва галузі для вкладки демо
-    demo_intro: str  # що написано на демо-сторінці про це заведення
-    demo_try: tuple[str, ...]  # підказки «спробуйте сказати»
-    tz: str  # часовий пояс ЗАКЛАДУ, не сервера
+    demo_tab: str  # the short industry name on the demo tab
+    demo_intro: str  # what the demo page says about this business
+    demo_try: tuple[str, ...]  # the "try saying" suggestions
+    tz: str  # the timezone of the BUSINESS, not of the server
     booking: BookingConfig
 
     def now(self) -> datetime:
-        """Зараз — за годинником закладу.
+        """Now, by the clock of the business.
 
-        Раніше час усюди брався голий (`datetime.now()`), тобто за годинником
-        хоста. На ноуті це Варшава (−1 год від Києва), у Docker/Railway — UTC
-        (−3 год). Наслідок: з півночі до третьої за Києвом у промпті стояла
-        ВЧОРАШНЯ дата, а запис «на сьогодні» відхилявся як «цей час уже минув».
-        Для цілодобової аварійки це якраз години пік.
+        Time used to be taken bare (`datetime.now()`), i.e. by the host's clock.
+        On a laptop that might be an hour off; in Docker or on Railway it is UTC,
+        three hours behind Kyiv. The consequence: between midnight and three in
+        the morning the prompt carried YESTERDAY'S date, and booking "for today"
+        was rejected as being in the past. For a 24/7 emergency service those
+        are peak hours.
         """
         return datetime.now(ZoneInfo(self.tz)).replace(tzinfo=None)
 
@@ -224,20 +239,21 @@ class Business:
         return self.customer[2]
 
     def stt_keyterms(self) -> list[str]:
-        """Слова, які STT має розпізнавати впевнено: назви послуг + доменні.
+        """Words the STT must recognise confidently: service names and domain
+        vocabulary.
 
-        ElevenLabs Scribe приймає keyterm не довший за 20 символів (саме
-        символів, не байтів — кирилиця рахується як звичайні літери) і не
-        більше 50 штук. На порушенні він РВЕ ВСЕ З'ЄДНАННЯ (1008
-        invalid_request), а не ігнорує зайве. Виглядає це як «розпізнавання не
-        працює взагалі»: звук іде, VAD спрацьовує, а транскриптів немає — і
-        pipecat 1.5 навіть не показує причину (тип invalid_request у нього не
-        оброблений, повідомлення тоне в DEBUG).
+        ElevenLabs Scribe accepts a keyterm of at most 20 characters (characters,
+        not bytes) and at most 50 of them. On a violation it CLOSES THE WHOLE
+        CONNECTION (1008 invalid_request) rather than ignoring the extra. It
+        looks like "speech recognition is completely broken": audio flows, the
+        VAD fires, and no transcript ever arrives — and pipecat 1.5 does not even
+        show the reason, because it has no handler for the invalid_request
+        message type and it sinks into DEBUG.
 
-        Тому обидві межі тримаємо тут, а не сподіваємось на сервер: довгі назви
-        («Аварійне відкриття дверей») ріжемо на слова, а список обрізаємо до
-        MAX_KEYTERMS. Ріжемо саме тут, бо `raw.split()` кількість термінів ще й
-        множить — на великому конфігу ліміт 50 досяжний.
+        So both limits are enforced here instead of being left to the server:
+        long labels are split into words, and the list is truncated to
+        MAX_KEYTERMS. Truncating here matters because `raw.split()` multiplies
+        the number of terms — on a large config the limit of 50 is reachable.
         """
         out: list[str] = []
         for raw in [r.label for r in self.booking.resources] + list(self.keyterms):
@@ -256,7 +272,7 @@ class Business:
         return uniq[:MAX_KEYTERMS]
 
 
-# --------------------------- завантаження YAML ---------------------------
+# --------------------------- loading the YAML ---------------------------
 
 
 def _resources(raw: list[dict] | None) -> tuple[Resource, ...]:
@@ -277,7 +293,7 @@ def _resources(raw: list[dict] | None) -> tuple[Resource, ...]:
 
 
 def load_business(key: str | None = None) -> Business:
-    """Прочитати YAML закладу. key=None → BUSINESS_CONFIG / BUSINESS / 'hotel'."""
+    """Read a business YAML. key=None → BUSINESS_CONFIG / BUSINESS / 'hotel'."""
     path_env = _CLI_CONFIG or os.getenv("BUSINESS_CONFIG")
     if key is None and path_env:
         path = Path(path_env)
@@ -286,7 +302,7 @@ def load_business(key: str | None = None) -> Business:
         path = BUSINESSES_DIR / f"{key}.yaml"
     if not path.exists():
         available = sorted(p.stem for p in BUSINESSES_DIR.glob("*.yaml"))
-        raise FileNotFoundError(f"немає конфігу закладу {path}; доступні: {available}")
+        raise FileNotFoundError(f"no business config at {path}; available: {available}")
 
     d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     b = d.get("booking") or {}
@@ -349,17 +365,23 @@ def load_business(key: str | None = None) -> Business:
     )
 
 
-#: Активний заклад процесу. Один процес обслуговує один заклад — так само, як
-#: один телефонний номер належить одному закладу.
+#: The process's active business. One process serves one business, in the same
+#: way that one phone number belongs to one business.
 BUSINESS = load_business()
 
 
-# ----------------------------- системний промпт -----------------------------
+# ----------------------------- the system prompt -----------------------------
+#
+# Everything below returns text that goes to the model. It is written in the
+# business's language on purpose, and it is the future content of the language
+# pack (locales/<lang>.yaml). The docstrings are in English because they are for
+# whoever maintains this file.
 
 
 def _speech_rules(biz: Business) -> str:
-    """Як говорити. Це найсильніший важіль природності — сильніший за будь-які
-    налаштування TTS: синтезатор озвучує пунктуацію, а не зміст."""
+    """How to talk. This is the strongest lever on sounding natural — stronger
+    than any TTS setting, because the synthesiser voices punctuation, not
+    meaning."""
     cust = biz.customer_gen
     return f"""ГОВОРИ, А НЕ ПИШИ. Твій текст читає синтезатор мовлення, і він озвучує саме те,
 як написано: кожна кома — це пауза. Тому фрази з письмової мови звучать
@@ -406,7 +428,7 @@ def _speech_rules(biz: Business) -> str:
 
 
 def _phone_rules(biz: Business) -> str:
-    """Правила читання українського номера вголос — однакові для всіх галузей."""
+    """How to read a phone number out loud — the same for every industry."""
     return f"""Телефон ОБОВ'ЯЗКОВО повтори вголос, але промовляй його так, як це роблять
 люди — групами, а не по одній цифрі: 0632096974 — «нуль шістдесят три
 <break time="0.4s" /> двісті дев'ять <break time="0.4s" /> шістдесят дев'ять
@@ -419,7 +441,7 @@ def _phone_rules(biz: Business) -> str:
 
 
 def _intake_rules(biz: Business) -> str:
-    """Додаткові питання галузі — по одному за раз, а не анкетою."""
+    """The industry's extra questions — one at a time, not as a questionnaire."""
     fields = biz.booking.intake
     if not fields:
         return ""
@@ -439,8 +461,9 @@ def _intake_rules(biz: Business) -> str:
 
 
 def _booking_flow(biz: Business) -> str:
-    """Сценарій запису. Кроки однакові, різниця лише в тому, що збираємо:
-    інтервал діб (готель) чи дату+час (клініка, барбершоп)."""
+    """The booking script. The steps are the same; the only difference is what
+    gets collected: a range of days (hotel) or a date and time (clinic,
+    barbershop)."""
     bk = biz.booking
     cust_nom = biz.customer_nom
 
@@ -508,8 +531,9 @@ def build_system_prompt(biz: Business | None = None) -> str:
     blocks = [
         f"Ти — {biz.agent_name}, {biz.persona} ({biz.name}).\nРозмовляй природною українською мовою.",
         _speech_rules(biz),
-        # Час, а не лише дата: без нього модель не знає, що таке «зараз» і
-        # «через годину» — а для аварійки це основний запит.
+        # The time, not only the date: without it the model does not know what
+        # "now" or "in an hour" mean — and for an emergency service that is the
+        # main kind of request.
         f"Сьогодні {today}, {weekday}, зараз {now.strftime('%H:%M')}.\n"
         f"Коли {biz.customer_nom} називає дату чи час усно\n"
         "(«чотирнадцятого липня», «наступного вівторка», «десь після обіду»), сам\n"
@@ -535,7 +559,7 @@ create_booking не виклика́й більше нічого: сам зап�
 
 
 def greeting_hint(biz: Business | None = None) -> str:
-    """Підказка моделі для першої репліки — вітається агент, не гість."""
+    """A hint for the model's first line — the agent greets, not the caller."""
     biz = biz or BUSINESS
     return (
         f"Привітайся першою, дуже коротко, як {biz.persona} ({biz.name}), "
@@ -544,7 +568,7 @@ def greeting_hint(biz: Business | None = None) -> str:
 
 
 def slot_grid(day: date, biz: Business | None = None) -> list[datetime]:
-    """Усі можливі початки візитів на цей день за графіком закладу."""
+    """Every possible appointment start on this day, per the opening hours."""
     biz = biz or BUSINESS
     hours = biz.booking.hours_for(day)
     if not hours:
@@ -560,7 +584,7 @@ def slot_grid(day: date, biz: Business | None = None) -> list[datetime]:
     return out
 
 
-if __name__ == "__main__":  # швидка перевірка: python business.py [key]
+if __name__ == "__main__":  # quick check: python business.py [key]
     import sys
 
     b = load_business(sys.argv[1]) if len(sys.argv) > 1 else BUSINESS
