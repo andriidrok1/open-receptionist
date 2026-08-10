@@ -44,6 +44,8 @@ import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
+import yaml
+
 _ARGV = sys.argv[1:]
 if "--business" in _ARGV:
     i = _ARGV.index("--business")
@@ -81,102 +83,58 @@ _digits = lambda s: re.sub(r"\D", "", s or "")  # noqa: E731
 
 
 # ------------------------------- personas -------------------------------
+#
+# The callers live in scenarios/<lang>.yaml, next to the language they speak.
+# Deliberately not in locales/: a language pack ships to whoever runs this, and
+# test fixtures do not belong in it.
 
-def _future(days: int) -> str:
-    return (date.today() + timedelta(days=days)).isoformat()
+SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 
 
-FACTS = {
-    "name": "Тарас Мельник",
-    "phone": "0632096974",
-    "address": "вулиця Січових Стрільців, будинок сім, квартира дванадцять",
-}
+def _load_scenarios(language: str) -> dict:
+    path = SCENARIOS_DIR / f"{language}.yaml"
+    if not path.exists():
+        available = sorted(p.stem for p in SCENARIOS_DIR.glob("*.yaml"))
+        sys.exit(
+            f"no caller scenarios for language {language!r} ({path}). "
+            f"Available: {available}. Write them the way the language pack was "
+            f"written — from scratch, not translated."
+        )
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
-_service = BOOK.resources[0].label if BOOK.resources else "послуга"
+
+SCEN = _load_scenarios(BUSINESS.language)
+FACTS = SCEN["facts"]
+
+BOOK = BUSINESS.booking
+_service = BOOK.resources[0].label if BOOK.resources else "service"
 _service_alt = BOOK.resources[-1].label if len(BOOK.resources) > 1 else _service
 
+
+def _fill(text: str) -> str:
+    """Substitute the business's services and dates relative to today.
+
+    Dates are computed rather than written down: a scenario with a hard-coded
+    month rots within a month, which this suite learned the hard way.
+    """
+    out = text.replace("{service_alt}", _service_alt).replace("{service}", _service)
+    for m in set(re.findall(r"\{(plus|minus)_(\d+)\}", out)):
+        sign = 1 if m[0] == "plus" else -1
+        day = (date.today() + timedelta(days=sign * int(m[1]))).isoformat()
+        out = out.replace(f"{{{m[0]}_{m[1]}}}", day)
+    return out
+
+
 PERSONAS = {
-    "plain": {
-        "title": "Звичайний клієнт: приходить, домовляється, дає дані",
-        "style": "Ти спокійний і конкретний. Відповідаєш коротко, по суті.",
-        "goal": f"Записатися на «{_service}» на {_future(3)}, приблизно на 11:00.",
-    },
-    "mumbler": {
-        "title": "Мимрить, тягне «е-е-е», формулює з другого разу",
-        "style": (
-            "Ти говориш нечітко, з паузами і словами-паразитами («е-е-е», «ну»,"
-            " «як його»). Перше речення в тебе виходить незрозумілим, уточнюєш"
-            " лише коли перепитають. Ніколи не називаєш усе одразу."
-        ),
-        "goal": f"Записатися на «{_service}», десь наступного тижня, зранку.",
-    },
-    "past_date": {
-        "title": "Просить дату, яка вже минула",
-        "style": "Ти впевнений у собі й не одразу розумієш, що помилився з датою.",
-        "goal": (
-            f"Записатися на «{_service}» на {(date.today() - timedelta(days=30)).isoformat()}"
-            " (так, це вже минуле — ти переплутав). Якщо скажуть, що дата минула —"
-            f" погодься і назви {_future(5)}."
-        ),
-    },
-    "changes_mind": {
-        "title": "Передумує: інша послуга, потім інший час",
-        "style": "Ти нерішучий. Двічі змінюєш рішення, вже після того як назвав перше.",
-        "goal": (
-            f"Спершу просиш «{_service}» на {_future(4)} о 10:00. Потім передумуєш"
-            f" і хочеш «{_service_alt}». Потім просиш перенести на 15:00."
-        ),
-    },
-    "bad_phone": {
-        "title": "Диктує номер із помилкою, потім виправляє",
-        "style": "Ти квапишся і плутаєшся в цифрах.",
-        "goal": (
-            f"Записатися на «{_service}» на {_future(6)} о 12:00. Коли спитають"
-            " телефон — назви спершу нуль шість три два нуль дев'ять шість дев'ять"
-            " сім (це лише дев'ять цифр). Якщо перепитають — назви правильний."
-        ),
-    },
-    "offtopic": {
-        "title": "Питає те, чого заклад не оголошував",
-        "style": "Ти допитливий, ставиш питання поза стандартним прайсом.",
-        "goal": (
-            "Дізнатися те, чого немає у прайсі закладу (щось незвичне для цієї"
-            " галузі). Записуватись не хочеш. Якщо запропонують передзвонити —"
-            " погодься і дай свої дані."
-        ),
-    },
-    "silent_address": {
-        "title": "Не називає адресу, доки не спитають прямо",
-        "style": (
-            "Ти небалакучий. Даєш рівно те, про що спитали, і нічого зверху."
-            " Адресу називаєш ТІЛЬКИ якщо спитають про неї прямо."
-        ),
-        "goal": f"Записатися на «{_service}» на {_future(2)} о 14:00.",
-    },
+    key: {**body, "style": _fill(body["style"]), "goal": _fill(body["goal"])}
+    for key, body in SCEN["personas"].items()
 }
 
 
 def caller_prompt(p: dict) -> str:
-    return f"""Ти — людина, яка телефонує в заклад «{BUSINESS.name}». Ти звичайний
-клієнт, а не асистент. Ти НЕ знаєш, як влаштована система на тому боці.
-
-Твій характер: {p['style']}
-
-Твоя мета: {p['goal']}
-
-Твої дані (називай їх ЛИШЕ коли спитають, і саме такими):
-- ім'я: {FACTS['name']}
-- телефон: {FACTS['phone']}
-- адреса: {FACTS['address']}
-
-Правила:
-- Говори українською, короткими репліками, як у телефонній розмові.
-- Одна репліка — одна думка. Не переказуй свою мету цілком.
-- НЕ вигадуй фактів про себе понад ті, що вище. Якщо питають те, чого немає в
-  твоїх даних, — скажи, що не знаєш або що це неважливо.
-- Коли мети досягнуто (тебе записали) або стало ясно, що не вийде, попрощайся
-  і додай окремим словом: КІНЕЦЬ
-- Ніяких пояснень «як модель». Тільки репліка клієнта."""
+    return SCEN["caller_prompt"].format(
+        business_name=BUSINESS.name, style=p["style"], goal=p["goal"], **FACTS
+    )
 
 
 # ------------------------------- the run -------------------------------
@@ -201,7 +159,7 @@ def run_call(client: OpenAI, tools: list, persona: dict) -> dict:
 
     # The agent speaks first, exactly as on a real call.
     agent_msgs.append({"role": "developer", "content":
-                       f"Привітайся першою, дуже коротко, як {BUSINESS.persona}."})
+                       SCEN["greeting_hint"].format(persona=BUSINESS.persona)})
 
     for _ in range(MAX_TURNS):
         # --- the agent's turn (may contain tool calls) ---
@@ -229,8 +187,8 @@ def run_call(client: OpenAI, tools: list, persona: dict) -> dict:
         cres = client.chat.completions.create(model=CALLER_MODEL, messages=caller_msgs)
         caller_text = (cres.choices[0].message.content or "").strip()
         caller_msgs.append({"role": "assistant", "content": caller_text})
-        done = "КІНЕЦЬ" in caller_text
-        caller_text = caller_text.replace("КІНЕЦЬ", "").strip()
+        done = SCEN["end_marker"] in caller_text
+        caller_text = caller_text.replace(SCEN["end_marker"], "").strip()
         if caller_text:
             transcript.append(("caller", caller_text))
             agent_msgs.append({"role": "user", "content": caller_text})
@@ -260,7 +218,7 @@ def check_no_fabricated_data(run) -> list[str]:
             continue
         phone = _digits(args.get("phone"))
         if phone and phone not in said_digits and phone[1:] not in said_digits:
-            bad.append(f"{name}: телефон {phone} клієнт не називав")
+            bad.append(f"{name}: phone {phone} was never given by the caller")
         for field in [f.key for f in BOOK.intake] + ["customer_name"]:
             val = (args.get(field) or "").strip()
             if not val:
@@ -268,7 +226,7 @@ def check_no_fabricated_data(run) -> list[str]:
             # One meaningful word from the value having been spoken is enough.
             words = [w for w in re.findall(r"[\w']{4,}", val.lower())]
             if words and not any(w[:5] in said for w in words):
-                bad.append(f"{name}: «{field}» = {val!r} — такого в розмові не було")
+                bad.append(f"{name}: {field} = {val!r} — that never came up in the conversation")
     return bad
 
 
@@ -286,7 +244,9 @@ def check_booked_over_refusal(run) -> list[str]:
         if name == "check_availability":
             (refused.discard if res.get("available") else refused.add)(key)
         elif name == "create_booking" and key in refused:
-            bad.append(f"спроба записати на {key}, хоча перевірка сказала «зайнято»")
+            bad.append(
+                f"tried to book {key} after the check said it was taken"
+            )
     return bad
 
 
@@ -305,8 +265,26 @@ def warn_unverified_slot(run) -> list[str]:
         if name == "check_availability" and res.get("available"):
             ok.add(key)
         elif name == "create_booking" and res.get("success") and key not in ok:
-            warn.append(f"час {key[1] or key[3]} {key[2] or ''} названий без перевірки")
+            warn.append(f"time {key[1] or key[3]} {key[2] or ''} was named without being checked")
     return warn
+
+
+def check_booking_was_checked_at_all(run) -> list[str]:
+    """A booking was made without the agent ever asking whether it was free.
+
+    Found on the first English call: asked for "next Tuesday" the model resolved
+    the date to a Saturday, announced that ten was taken — nothing had been
+    checked — and went straight to booking. The date arithmetic being shaky was
+    known; that it also derails tool discipline was not.
+
+    This is deliberately language-independent: it counts tool calls rather than
+    reading what was said, so it works the same for every pack.
+    """
+    booked = any(n == "create_booking" and r.get("success") for n, _, r in run["tools"])
+    checked = any(n == "check_availability" for n, _, _ in run["tools"])
+    if booked and not checked:
+        return ["created a booking without a single check_availability call"]
+    return []
 
 
 def check_no_message_after_booking(run) -> list[str]:
@@ -316,7 +294,7 @@ def check_no_message_after_booking(run) -> list[str]:
         if name == "create_booking" and res.get("success"):
             booked = True
         elif name == "take_message" and booked and res.get("success"):
-            bad.append("take_message після успішного запису — зайвий передзвін")
+            bad.append("take_message after a successful booking — a pointless callback")
     return bad
 
 
@@ -331,23 +309,31 @@ def check_no_loop(run) -> list[str]:
             if len(k) < 10:
                 continue
             seen[k] = seen.get(k, 0) + 1
-    return [f"питання повторюється {n} рази: «{k}…»" for k, n in seen.items() if n >= 3]
+    return [f"the same question asked {n} times: {k!r}" for k, n in seen.items() if n >= 3]
 
 
 def check_no_success_claim_on_error(run) -> list[str]:
-    """If the booking failed, the agent must not claim it succeeded."""
+    """If the booking failed, the agent must not claim it succeeded.
+
+    The only check here that has to know the language: it reads what was said
+    rather than which tools were called. The words come from the scenarios file.
+    """
     ok = any(n == "create_booking" and r.get("success") for n, _, r in run["tools"])
     tried = any(n == "create_booking" for n, _, _ in run["tools"])
     if ok or not tried:
         return []
-    words = ("записала", "записав", "записано", "ваш запис", "заброньовано", "чекаємо на вас")
+    # The trigger words are language-specific, so they live with the scenarios.
+    # Hard-coding Ukrainian ones here meant this check quietly did nothing at
+    # all for an English business — which looks like coverage and is not.
+    words = tuple(w.lower() for w in SCEN["claim_words"])
     last = " ".join(t for who, t in run["transcript"][-4:] if who == "agent").lower()
-    return ["агент каже, що записав, хоча запис не створено"] if any(w in last for w in words) else []
+    return ["the agent says it is booked, but no booking exists"] if any(w in last for w in words) else []
 
 
 CHECKS = [
     check_no_fabricated_data,
     check_booked_over_refusal,
+    check_booking_was_checked_at_all,
     check_no_message_after_booking,
     check_no_loop,
     check_no_success_claim_on_error,
@@ -363,7 +349,7 @@ def main() -> int:
     names = [n for n in _ARGV if not n.startswith("-")] or list(PERSONAS)
     unknown = [n for n in names if n not in PERSONAS]
     if unknown:
-        print(f"Невідомі персони: {unknown}. Доступні: {list(PERSONAS)}")
+        print(f"Unknown personas: {unknown}. Available: {list(PERSONAS)}")
         return 2
 
     crm.init_db()
@@ -391,14 +377,14 @@ def main() -> int:
         if problems:
             for v in problems:
                 print(f"  ❌ {v}")
-            if not SHOW:  # без діалогу порушення не зрозуміти
+            if not SHOW:  # a violation makes no sense without the dialogue
                 for who, text in run["transcript"]:
                     print(f"     {'🤖' if who == 'agent' else '🧑'} {text}")
         elif not warnings:
-            print(f"  ✅ без порушень ({len(run['tools'])} викликів інструментів)")
+            print(f"  ✅ clean ({len(run['tools'])} tool calls)")
 
     _cleanup()
-    print(f"\n{'=' * 66}\nПідсумок: {total_bad} порушень у {len(names)} дзвінках")
+    print(f"\n{'=' * 66}\nSummary: {total_bad} violations across {len(names)} calls")
     return 1 if total_bad else 0
 
 
