@@ -1,0 +1,24 @@
+# Runtime dependencies. This file is the source of truth for installing the app:
+#
+#     pip install -r server/requirements.txt
+#
+# It is an application, not a library, so there is no package to `pip install -e`.
+#
+# pipecat extras, and why each one is here:
+#   openai      — the LLM, and the fallback speech-to-text and text-to-speech
+#   elevenlabs  — Scribe (speech-to-text) and the voice used in production
+#   silero      — local voice activity detection; it segments speech for the STT
+#                 commit and drives the end-of-turn strategy (pulls onnxruntime)
+#   webrtc      — the browser transport used by the demo page (pulls aiortc)
+#   websocket   — the transport telephony providers connect through
+#   runner      — the CLI entry point (`python bot.py -t twilio ...`)
+pipecat-ai[openai,elevenlabs,silero,webrtc,websocket,runner]>=1.5.0
+
+# The showcase page and the owner dashboard.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# Business configs, keys, and the HTTP client shared across the pipeline.
+pyyaml>=6.0
+python-dotenv>=1.0
+aiohttp>=3.9

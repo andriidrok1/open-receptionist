@@ -1,289 +1,262 @@
-# voice-receptionist
+# open-receptionist
 
-Голосовий ІІ-ресепшн українською для малого бізнесу. Клієнт дзвонить і говорить
-голосом → агент відповідає голосом, відповідає на питання про заклад, записує
-на послугу або бронює, а все, чого не знає, чесно передає людині.
+A self-hosted voice receptionist for small businesses. Someone calls, talks to it
+normally, and it answers questions about the business, books the appointment, and
+honestly hands off anything it doesn't know.
 
-Ядро галузі не знає. Хто саме на тому кінці дроту — задає один YAML:
+One YAML file describes one business. The core knows nothing about any industry:
 
 ```bash
-python bot.py                      # готель «Дніпро»    (бронь на доби)
-BUSINESS=clinic python bot.py      # стоматологія        (запис на час)
-BUSINESS=cleaning python bot.py    # клінінг             (запис + адреса виїзду)
-BUSINESS=emergency python bot.py   # аварійна служба     (цілодобово)
-BUSINESS=barbershop python bot.py  # барбершоп           (запис на час)
+BUSINESS=clinic     python bot.py   # dental practice   — appointments at a set time
+BUSINESS=hotel      python bot.py   # hotel             — bookings by the night
+BUSINESS=cleaning   python bot.py   # cleaning service  — appointment + address
+BUSINESS=emergency  python bot.py   # emergency plumber — 24/7, no closing time
+BUSINESS=barbershop python bot.py   # barbershop        — appointments at a set time
 ```
 
-Щоб послухати всі одразу — `python server/run_demo.py` (див. «Демо-вітрина»).
+A new business is a new file in `server/businesses/`. No code is touched.
 
-Новий заклад = новий файл у `server/businesses/`, коду не чіпаємо.
+Built on [Pipecat](https://github.com/pipecat-ai/pipecat). You bring your own
+speech-to-text, LLM and text-to-speech keys and pay those providers directly.
+Nothing sits in between charging you per minute.
 
-## Як влаштовано
+---
+
+## Status — please read before you clone
+
+This is honest, not modest. Here is exactly where it stands today.
+
+**Works, and has been used in real conversations**
+
+- Full voice conversation in the browser (WebRTC), in Ukrainian
+- Five business configs: hotel, dental, cleaning, emergency plumber, barbershop
+- Booking with availability, capacity, working hours, and required intake fields
+  (a cleaning visit will not be created without an address)
+- SQLite store, owner dashboard, and a demo page you can hand to a business owner
+- Two test harnesses: scripted dialogues and an LLM playing the caller
+
+**In progress, and not there yet**
+
+- **English.** Today the agent speaks Ukrainian. The design for the locale layer
+  is done; the language is not just a setting, it is baked into the prompt, the
+  tool error strings the model reads, phone formats, month names and 12h/24h time.
+- **Real phone numbers.** The Twilio / Telnyx / Plivo transports are wired up and
+  have never been tested on an actual number. Until that is done, this answers a
+  browser, not a phone.
+- **Cost per minute.** Not measured yet. When it is, the number and the method to
+  reproduce it go here.
+
+**Not planned**
+
+Multi-tenancy, billing, hosted service, CRM/PMS integrations, an owner mobile app.
+
+If you need something you can put in front of paying customers this week, this is
+not it yet. If you want to see how a production voice pipeline actually behaves —
+and to own the stack instead of renting it — read on.
+
+---
+
+## Who this is for
+
+**People building AI receptionists for local businesses.** Configure a client in
+one file, run one process per client, keep the margin instead of paying a platform
+a cut of every minute forever.
+
+**A business that wants to own the thing answering its phone.** No vendor deciding
+what happens to your call recordings or what next year's pricing is.
+
+**Engineers.** Everything below the fold is about the parts that are not in any
+tutorial — see [The hard parts](#the-hard-parts-already-solved).
+
+---
+
+## How it works
 
 ```
-мікрофон → Silero VAD → ElevenLabs Scribe STT (uk) → OpenAI LLM (gpt-4o-mini)
-        → speech_text (чистка пауз) → ElevenLabs TTS (Kateryna, uk) → динамік
+mic → Silero VAD → ElevenLabs Scribe STT → OpenAI LLM → ElevenLabs TTS → speaker
+                                              ↓
+                                    tools: check availability,
+                                    create booking, take message
+                                              ↓
+                                        SQLite + dashboard
 ```
 
-| файл | за що відповідає |
+| file | what it owns |
 |---|---|
-| `server/bot.py` | пайплайн, голос, транспорт (браузер / телефонія). Галузевого — нічого |
-| `server/business.py` | читає YAML закладу, збирає системний промпт |
-| `server/businesses/*.yaml` | **тут живе весь заклад**: персона, знання, послуги, ціни, графік |
-| `server/agent_tools.py` | інструменти агента, зібрані з конфігу (одні й ті самі для бота та eval) |
-| `server/crm.py` | записи, броні, запити на дзвінок (SQLite) |
-| `server/dashboard.py` + `static/` | панель для власника закладу |
-| `server/demo.py` + `run_demo.py` | демо-вітрина: вкладки галузей і дзвінок з браузера |
-| `server/eval.py` | текстові сценарії діалогу проти реального OpenAI |
-| `server/voice_lab.py` | лабораторія підбору голосу |
+| `server/bot.py` | pipeline, voice, transport (browser / phone). Nothing industry-specific |
+| `server/business.py` | reads the business YAML, assembles the system prompt |
+| `server/businesses/*.yaml` | **the entire business lives here**: persona, knowledge, services, prices, hours |
+| `server/agent_tools.py` | the agent's tools, built from the config — one code path for the bot and the tests |
+| `server/crm.py` | bookings, messages, availability, validation |
+| `server/dashboard.py` | the owner's panel |
+| `server/demo.py`, `run_demo.py` | the showcase page you show a business owner |
+| `server/eval.py`, `server/simulate.py` | the test harnesses |
 
-### Дві моделі часу покривають майже весь ресепшн
+### Two time models cover almost every receptionist
 
-- **`nights`** — бронь на інтервал діб. Межі задає клієнт (заїзд/виїзд), ціна за
-  добу × кількість діб. Готель, апартаменти, оренда.
-- **`slots`** — запис на конкретний час. Межі задає послуга (тривалість із
-  конфігу), ціна фіксована. Клініка, барбершоп, СТО, репетитор.
+- **`nights`** — booking a range of days. The customer sets the bounds (check-in,
+  check-out), price is per night × number of nights. Hotels, apartments, rentals.
+- **`slots`** — an appointment at a specific time. The service sets the bounds
+  (duration comes from the config), price is flat. Clinics, barbershops, garages,
+  tutors.
 
-Обидві зводяться до одного: ресурс зайнятий на проміжку `[starts_at, ends_at)`,
-і зайняти його можна не більше ніж `capacity` разів одночасно. Звідси один SQL
-на перетин і один шлях коду замість двох.
+Both reduce to the same thing: a resource is occupied over `[start, end)` and can
+be occupied at most `capacity` times at once. One SQL query for overlap, one code
+path — not two parallel branches of business logic.
 
-Заклад без записів взагалі (`booking.enabled: false`) отримає лише довідкові
-відповіді + `take_message` — це теж робочий ресепшн.
+A business with no bookings at all (`booking.enabled: false`) still gets answers
+and callback requests. That is a working receptionist too.
 
-## Конфіг закладу
+---
 
-`server/businesses/clinic.yaml` — приклад цілком:
+## Quickstart
 
-```yaml
-name: стоматологія «Дентал Сіті»
-agent_name: Оксана
-persona: адміністратор клініки
-customer: {nom: пацієнт, gen: пацієнта, dat: пацієнту}
-
-speech:                    # приклад тієї самої думки письмово й усно
-  bad:  Отже, консультація лікаря-стоматолога у вівторок...
-  good: Так, у вівторок о десятій вільно. Консультація — триста гривень. Записую?
-  recap: Записую вас на чистку, у вівторок о десятій, на Тараса...
-
-knowledge: |               # усе, що агент має право знати про заклад
-  Послуги й ціни: Консультація — 300 грн (30 хв)...
-
-booking:
-  granularity: slots
-  hours: {mon: "09:00-19:00", ..., sun: null}
-  resources:
-    - key: consult
-      label: Консультація
-      aliases: [консультацію, огляд, подивитися зуб]   # як це кажуть уголос
-      price: 300
-      duration_min: 30
-      capacity: 2          # скільки лікарів ведуть цю послугу одночасно
-```
-
-`aliases` — не косметика: клієнт каже «подивитися зуб», а не «консультація».
-`speech.bad/good` теж не косметика — див. нижче.
-
-## Як звучить живо, а не роботом
-
-Три важелі, у порядку спадання сили:
-
-1. **Текст, який пише LLM.** Сильніший за будь-які налаштування TTS: модель
-   озвучує пунктуацію, а не зміст. Промпт вимагає усної мови («Так, дивлюся —
-   Покращений на двох є. Три ночі, п'ять тисяч чотириста. Бронюємо?») замість
-   письмової («Отже, номер Покращений на двох, з чотирнадцятого по сімнадцяте
-   липня, три ночі. Разом п'ять тисяч чотириста гривень. Підтверджуєте?»).
-   Саме тому кожен YAML несе власну пару `speech.bad` / `speech.good` — модель
-   копіює приклад, і він має бути з фраз цього закладу.
-2. **Нативний голос.** Англійський голос, читаючи українську, промахується по
-   наголосах — це лікується не розміткою, а зміною голосу (історія в
-   `speech_text.py`).
-3. **Ціла репліка одним синтезом.** За замовчуванням pipecat озвучує по
-   реченню: перше вже звучить, поки модель дописує друге. Затримка коротша, але
-   інтонація будується в межах речення — синтезатор не знає, що далі буде ще
-   фраза, і кожну завершує крапкою. Репліка з трьох речень звучить як три
-   оголошення. `WholeReplyAggregator` (у `speech_text.py`) притримує текст до
-   кінця відповіді й віддає одним шматком: інтонація тягнеться крізь усю
-   репліку, ціна не падає в порожнечу, питання в кінці звучить питанням.
-   Ціна — затримка від кінця вашої фрази до голосу росте приблизно з 1,5 до
-   2,2 с. Вимикається через `TTS_WHOLE_REPLY=0`.
-4. **`stability` / `style`** — тонка підстройка характеру. Kateryna Pavlenko,
-   `stability 0.4`, `style 1.0`, `speed 0.95` — підібрано на слух через
-   `voice_lab.py` (`list`, `build`, `prosody`, `pause`, `style`, `words`,
-   `final`, `serve`).
-
-`enable_ssml_parsing=True` обов'язковий — інакше `<break>`-теги підуть у модель
-звичайним текстом.
-
-## Запуск
-
-Віртуальне оточення вже створене в `.venv/` (Python 3.12).
+Requires Python 3.11+, an OpenAI key, and an ElevenLabs key for the voice.
 
 ```bash
+git clone <this repo> && cd open-receptionist
+python -m venv .venv && source .venv/bin/activate
+pip install -r server/requirements.txt
+
 cd server
-cp .env.example .env      # впиши OPENAI_API_KEY (і ELEVENLABS_API_KEY для голосу)
-cd ~/PycharmProjects/hotel-voice-agent && source .venv/bin/activate
-cd server && python bot.py
+cp .env.example .env      # add OPENAI_API_KEY and ELEVENLABS_API_KEY
+python bot.py
 ```
 
-Відкрий http://localhost:7860/client → **Connect** → дозволь мікрофон → говори.
+Open <http://localhost:7860/client>, hit **Connect**, allow the microphone, talk.
 
-## Дашборд
-
-Одна сторінка на всі галузі — підписи приходять із конфігу разом із даними:
-готелю вона показує «Тип номера / Ночей / Гостей», барбершопу — «Послуга /
-Тривалість» без колонки гостей.
-
-```bash
-python seed_demo.py     # (опц.) демо-дані для показу; для реального клієнта НЕ запускати
-python dashboard.py     # → http://localhost:8000
-BUSINESS=clinic python dashboard.py
-```
-
-KPI (записи, виручка, середній чек із дельтами період-до-періоду), завантаження
-по послугах, виручка бар-чартом, таблиця записів, блок «Запити на зворотний
-дзвінок». Без зовнішніх бібліотек, автооновлення раз на 15 сек.
-
-## Демо-вітрина
-
-Сторінка, з якої можна подзвонити боту будь-якої галузі — саме те, що показують
-власнику бізнесу. Вкладки будуються з тих самих YAML: **новий конфіг = нова
-вкладка, фронт не чіпаємо.**
+To see all five businesses side by side with a demo page:
 
 ```bash
 cd server && python run_demo.py     # → http://localhost:8080
 ```
 
-Піднімає по процесу бота на кожну галузь (порти 7860+) і вітрину на :8080.
-Ctrl+C гасить усе. Один процес = один заклад, бо `BUSINESS` фіксується на
-імпорті; переробляти це на пер-сесію заради демо — міняти працююче ядро.
+That page is the one you show a business owner: their prices and hours, a call
+button, a live transcript, a feed of what the agent actually did, and — the part
+that sells it — the booking that just appeared in the database.
 
-Що на сторінці: картка закладу з прайсом і графіком, підказки «спробуйте
-сказати» (без них тестувальник каже «алло» і кладе трубку), кнопка дзвінка,
-живий транскрипт розмови, стрічка дій бота («перевірила вільний час»,
-«створила запис») і — найголовніше — **картка запису, який щойно з'явився в
-базі**. Голосове демо саме по собі викликає «прикольно»; запис у системі
-викликає «це працює».
+---
 
-Що налаштувати в YAML:
+## Describing a business
+
+This is the whole point of the project, so here is a real config, trimmed. It is
+in Ukrainian, which is also the proof that this is not an English-only system.
 
 ```yaml
-demo:
-  tab: Клінінг              # напис на вкладці
-  intro: Оксана приймає…    # що людина тестує
-  try: ["Хочу замовити прибирання двокімнатної", …]
+name: стоматологія «Дентал Сіті»       # how the agent says the business name out loud
+agent_name: Оксана                      # the agent's name
+persona: адміністратор клініки          # "receptionist at a dental practice"
+
+speech:                                 # the same thought written vs. spoken
+  bad:  Отже, консультація лікаря-стоматолога у вівторок…
+  good: Так, у вівторок о десятій вільно. Консультація — триста гривень. Записую?
+
+knowledge: |                            # everything the agent is allowed to know
+  Послуги й ціни: Консультація — 300 грн (30 хв)…
+
+booking:
+  granularity: slots
+  hours: {mon: "09:00-19:00", sat: "10:00-15:00", sun: null}
+  resources:
+    - key: consult
+      label: Консультація
+      aliases: [консультацію, огляд, подивитися зуб]   # how people actually say it
+      price: 300
+      duration_min: 30
+      capacity: 2                       # how many dentists cover this service at once
 ```
 
-Підключення веде **офіційний SDK pipecat**, зібраний у `server/static/voice-client.js`.
-Свій клієнт я спершу написав руками — і заплатив за це чотирма багами поспіль:
-брав не те повідомлення з текстом бота, малював проміжні здогадки розпізнавання
-як репліки співрозмовника, склеював речення не в тому порядку і губив звук після
-першої секунди. SDK знає протокол, бо його писали ті самі люди. Перезібрати після
-правок `client/src.js`:
+`aliases` are not decoration: a caller says "come look at my tooth", not
+"consultation". `speech.bad` / `speech.good` are not decoration either — the model
+copies the example it is given, so the example has to be in this business's own
+voice, not a generic one.
+
+---
+
+## The hard parts, already solved
+
+None of this is in any tutorial. Every item cost a live debugging session.
+
+**The bot heard itself.** With manual commit, everything the microphone picks up
+between commits is attributed to the caller — and a commit only happens when the
+caller stops talking. Echo from the speakers (quiet enough that local VAD ignores
+it, loud enough that Scribe transcribes it perfectly) ended up in the context as
+the caller's words. Measured: the bot's own line came back as the human's. Fixed
+by muting the STT input while the bot speaks. **On a phone line, where there is no
+browser echo cancellation, this is not an edge case — it is guaranteed.**
+
+**Interim transcripts interrupted the bot mid-sentence.** The default turn-start
+strategy treats any partial transcript as the user starting to talk, which
+broadcasts an interruption. With manual commit no final transcript follows, so the
+turn hangs until a 5-second watchdog closes it empty and the LLM never runs. It
+sounds exactly like a dropped connection.
+
+**A slow first byte from TTS dropped the entire reply.** If the synthesiser takes
+longer than the default 3 seconds to return audio, the whole utterance is
+discarded silently — and the service stays paused until the next interruption. Not
+a stutter: silence for the rest of the turn.
+
+**One ElevenLabs keyterm longer than 20 characters closes the whole socket.** Not
+ignored — closed, with code 1008. It looks like "speech recognition is completely
+broken": audio flows, VAD fires, no transcripts ever arrive. Service names are
+pulled from the config, so two of five businesses were dead and three were fine.
+
+**Sentence-by-sentence synthesis sounds like three announcements.** Pipecat
+synthesises each sentence as it arrives, which is the lowest latency but builds
+intonation inside one sentence — the price lands flat and the closing question
+doesn't sound like a question. `WholeReplyAggregator` holds the reply and
+synthesises it in one piece. It costs about 0.7 s of latency.
+
+**Anything deterministic belongs in code, not in the prompt.** Phone format, real
+names instead of placeholders, times in the past, closing hours, overbooking — the
+model will violate every one of these politely and confidently. The tools now
+return errors the model can read out loud, and a `spoken` string it just recites,
+because when it computed the numbers itself it said one date and stored another.
+
+---
+
+## Testing
 
 ```bash
-cd client && npm i && ./node_modules/.bin/esbuild src.js --bundle --format=iife \
-    --minify --outfile=../server/static/voice-client.js
+python eval.py --business all   # scripted dialogues against the real model
+python simulate.py --show       # an LLM plays the caller: mumbles, changes its mind,
+                                # gives a wrong number, asks for a date in the past
 ```
 
-Якщо демо мовчить — відкрий `http://localhost:8080/?debug=1`: у консоль піде лог подій SDK.
+`simulate.py` checks things that do not depend on the scenario: did the agent
+invent data the caller never gave, promise a slot the tools never confirmed, claim
+it booked something when it didn't, or ask the same question three times.
 
-Дві незручні деталі, які варто знати заздалегідь:
+Both need an OpenAI key. A test layer that runs without any network is the next
+thing to build — see the roadmap.
 
-- **Мікрофон працює лише в захищеному контексті.** `localhost` — так, а от
-  відкрити демо з телефона за `http://192.168.x.x` не вийде: браузер просто не
-  дасть доступ. Для показу з телефона потрібен https (тунель або деплой).
-- **Кожна хвилина розмови коштує грошей.** Тому ліміт дзвінка (`MAX_CALL_SECONDS`,
-  типово 180 с) стоїть і на сторінці, і в боті — вкладку можна просто не закрити.
-  Демо-записи лежать в окремих базах `demo_<business>.db` і чистяться при старті.
+---
 
-## Захисти, які вже стоять
+## Roadmap
 
-- **Телефон** (`crm.validate_phone`): приймає `0XXXXXXXXX`, `+380…`, `380…`,
-  `80…`; усе інше повертає помилку, і агент перепитує. Модель, розпізнаючи
-  номер із мовлення, інколи додає або губить цифру — а запис на номер, за яким
-  не додзвоняться, гірший за відсутність запису.
-- **Минулий час** — і дати, і години відхиляються на рівні `crm`.
-- **Неробочий час** — візит, що не влазить у графік або не встигає до закриття,
-  не створиться.
-- **Овербукінг** — `capacity` перевіряється ще раз перед вставкою.
-- **Обов'язкові поля галузі** (`booking.intake`) — виїзд без адреси не створиться.
-  Перевірка в `crm`, а не тільки в промпті: замовлення на прибирання без адреси
-  це брак, а не дрібниця.
-- **Зайнятий час** — інструмент одразу повертає вільні альтернативи (спершу
-  найближчі до бажаної години, потім наступний робочий день), щоб агент мав що
-  запропонувати замість «немає».
+1. **Phone spike** — one real call from a real handset, to find out what breaks
+2. **Locale layer** — English as a first-class second language
+3. **Phone, properly** — a number you can hand to a business, with the setup documented
+4. **Repository hygiene** — comments translated, CI, contribution guide
+5. **Numbers** — measured cost per minute, and how speech recognition holds up on a
+   narrowband phone line
 
-## Тести логіки (eval)
+---
 
-`server/eval.py` ганяє діалогові сценарії проти реального OpenAI: той самий
-промпт, ті самі tools, те саме сховище, тільки без STT/TTS.
+## Support
 
-```bash
-cd server
-python eval.py                     # сценарії активного закладу
-python eval.py --business clinic   # стоматологія
-python eval.py --business all      # усі заклади поспіль
-python eval.py T3 T6               # тільки вибрані
-```
+This is built in the open and issues and pull requests are welcome.
 
-Готель: T3 happy path, T4 зміна номера до підтвердження, T6 погані дати,
-T8 ескалація. Запис на час (клініка, барбершоп, клінінг, аварійка): C1 happy path
-(з перевіркою, що поля опитування долетіли до бази), C2 зайнята година →
-альтернативи, C3 межа графіка (вихідний, після закриття або горизонт запису —
-залежить від закладу), C4 ескалація. Дати в репліках рахуються від сьогодні й
-проговорюються словами — інакше eval протухає разом із захардкодженим липнем.
+I do not take on setup, integration or consulting work, paid or unpaid. If the
+README is not enough to get you running, that is a bug in the README — please open
+an issue and it gets fixed for everyone.
 
-Сценарії з повним flow (T3/T4/C1) інколи падають на рівному місці: gpt-4o-mini
-не завжди доводить діалог до `create_booking` за відведені ходи. Перед тим, як
-шукати регресію, прожени сценарій окремо — якщо проходить, це флак моделі, а не
-код. Стабільно відтворюване падіння = справжня проблема.
+---
 
-## Симуляція дзвінків
+## License
 
-`server/simulate.py` — те саме без голосу, але клієнта грає окрема модель зі
-своїм характером. Ловить те, чого не ловлять скриптові сценарії: людина мимрить,
-передумує, називає дату, яка вже минула, мовчить про адресу.
+MIT — see [LICENSE](LICENSE). `server/bot.py` began life as a Pipecat example and
+keeps its original BSD-2-Clause notice from Daily.
 
-```bash
-cd server
-python simulate.py                       # усі персони активного закладу
-python simulate.py --business hotel      # інший заклад
-python simulate.py mumbler past_date     # тільки вибрані
-python simulate.py --list                # перелік персон
-python simulate.py --show                # з діалогами
-```
-
-Головне тут не діалог, а перевірки — вони не залежать від сценарію і ловлять
-клас «агент щось вигадав»: дані, яких клієнт не називав; запис на слот, який
-інструмент назвав зайнятим; take_message після вдалого запису; зациклене
-питання; заява «записала», коли запис не створився. Кожна з них — реальний баг
-із живого дзвінка.
-
-⚠️ окремо від ❌ — те, що не ламає дані, але виглядає неохайно: агент назвав час,
-якого не перевіряв. Переброні не станеться (crm перевіряє ще раз перед
-вставкою), але якщо слот виявиться зайнятим, доведеться переігрувати вже
-домовлений запис.
-
-Голосове (перебивання, шум, вимова) — тільки вручну, див. `server/TEST_SCENARIOS.md`.
-
-## Телефонія
-
-Код готовий (`twilio` / `telnyx` / `plivo`), на живому номері не перевірявся:
-
-```bash
-python bot.py -t twilio --proxy <hostname-тунелю>
-```
-
-Раннер підіймає `POST /` (віддає TwiML) і `/ws`. Без `--proxy` у TwiML поїде
-`wss://None/ws`. Телефонія шле 8 кГц mono — пайплайн перемикається сам.
-
-## Нотатки
-
-- LLM = OpenAI gpt-4o-mini (бюджет розмови ~300 мс round-trip). Змінити —
-  `OPENAI_MODEL` у `.env`.
-- Голос — `ELEVENLABS_VOICE_ID`, темп — `ELEVENLABS_SPEED`. Прибрати
-  `ELEVENLABS_API_KEY` → відкат на OpenAI TTS.
-- База кожного закладу окремо: `server/<business>.db` (або `CRM_DB`).
-  Стара готельна схема мігрує автоматично при першому запуску.
-- `uv` не використовується (на машині його немає) — звичайний venv + pip.
+Ukrainian documentation, which is currently more detailed:
+[docs/README.uk.md](docs/README.uk.md).
