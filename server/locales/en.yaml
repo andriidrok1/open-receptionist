@@ -412,3 +412,21 @@ fixtures:
                 William, Ashley, Daniel, Amanda, Christopher, Nicole, Brian, Laura]
   last_names: [Miller, Johnson, Garcia, Brown, Davis, Rodriguez, Wilson, Martinez,
                Anderson, Taylor, Thomas, Moore]
+
+# End-of-turn detection. Words a sentence almost never stops on: if the line
+# trails off on one of these it is a pause, not an ending, and the wait should
+# be longer. Cutting someone off mid-thought is worse than half a second lost.
+turn_taking:
+  # Quoted on purpose: YAML reads bare on/off/yes/no as booleans, and an
+  # unquoted `on` here silently became True — which then crashed the classifier
+  # rather than just misbehaving. Cheap to hit, confusing to diagnose.
+  continuations: ["and", "or", "but", "so", "because", "that", "which", "who",
+                  "when", "while", "if", "the", "a", "an", "my", "your", "our",
+                  "their", "his", "her", "its", "this", "these", "those", "to",
+                  "of", "in", "on", "at", "for", "with", "from", "by", "about",
+                  "into", "like", "is", "are", "was", "were", "am", "be", "been",
+                  "do", "does", "did", "can", "could", "would", "should", "will",
+                  "want", "need", "have", "has", "had", "it's", "i'd", "i'm",
+                  "we're", "there's", "let's", "one", "two", "three",
+                  "street", "avenue", "apartment", "number"]
+  sentence_end: ".!?…"

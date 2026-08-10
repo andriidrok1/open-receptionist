@@ -146,6 +146,8 @@ REQUIRED_KEYS = (
     "tools.reschedule_booking",
     "tools.ref_code_arg",
     "prompt.booking.changes",
+    "turn_taking.continuations",
+    "turn_taking.sentence_end",
 )
 
 

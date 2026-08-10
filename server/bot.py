@@ -39,6 +39,7 @@ import agent_tools
 import crm
 from business import BUSINESS, L, build_system_prompt, greeting_hint
 from call_metrics import CallMetrics, format_report
+from turn_taking import SemanticSpeechTimeoutStrategy
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.frames.frames import (
@@ -383,9 +384,22 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         # VAD stop). The turn then hung until the 5s watchdog and closed empty
         # — so the bot cut itself off and went silent for five seconds. The
         # strategy itself is kept as a safety net for other STT providers.
+        # How long to wait after silence before answering. A fixed timer gives
+        # "I'd like to book a…" and "I'd like to book a cleaning." the same
+        # wait, which is wrong in both directions. The semantic strategy re-times
+        # once the transcript lands — the words themselves say whether that was
+        # a pause or an ending. TURN_SEMANTIC=0 falls back to the plain timer.
+        if os.getenv("TURN_SEMANTIC", "1") == "1":
+            stop_strategy = SemanticSpeechTimeoutStrategy(
+                user_speech_timeout=1.1,  # the ceiling, before the transcript arrives
+                continuations=set(L.raw("turn_taking.continuations")),
+                sentence_end=L.text("turn_taking.sentence_end"),
+            )
+        else:
+            stop_strategy = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.1)
         turn_strategies = UserTurnStrategies(
             start=[VADUserTurnStartStrategy(), TranscriptionUserTurnStartStrategy(use_interim=False)],
-            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.1)],
+            stop=[stop_strategy],
         )
     else:
         # OpenAI's server VAD only sends UserStarted/StoppedSpeakingFrame (not
@@ -404,6 +418,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         """One row per call, so cost and latency can be looked at afterwards."""
         logger.info("\n" + format_report(summary))
         crm.log_event("call_metrics", json.dumps(summary, ensure_ascii=False, default=str))
+
+    call_metrics = CallMetrics(on_finish=store_metrics)
 
     # Pipeline: audio in → [VAD] → STT → aggregator → LLM → TTS → audio out.
     # The VAD processor (for the ElevenLabs STT) must sit BEFORE the STT: its
@@ -426,7 +442,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # above it — the first attempt sat before the STT and reported zeros
             # for all three services. The end of the line sees the VAD's
             # end-of-speech, the bot's start-of-speech and every metrics frame.
-            CallMetrics(on_finish=store_metrics),
+            call_metrics,
         ]
     )
 
@@ -465,6 +481,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info("Client disconnected")
+        # Report before cancelling: when the browser tab simply goes away, the
+        # worker is torn down without an EndFrame ever reaching the tail of the
+        # pipeline, and the call's numbers were silently lost. Which is most
+        # calls — people close the tab, they do not press a button.
+        call_metrics.report_now()
         await worker.cancel()
 
     # The demo page is public and every minute of conversation costs money. The

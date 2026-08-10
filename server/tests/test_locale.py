@@ -224,3 +224,33 @@ def test_pack_carries_the_rules_that_are_not_about_language(lang):
     assert "error" in text, "the 'an error is not a refusal' rule is missing"
     assert "take_message" in text, "the escalation tool is never mentioned"
     assert "create_booking" in text, "the booking tool is never mentioned"
+
+
+@pytest.mark.parametrize("lang", ALL_LANGUAGES)
+def test_turn_taking_lists_are_strings(lang):
+    """YAML reads bare on/off/yes/no as booleans.
+
+    An unquoted `on` in the English continuation list became True and crashed
+    the classifier instead of merely misbehaving — cheap to hit, confusing to
+    diagnose from the traceback.
+    """
+    words = load_locale(lang).raw("turn_taking.continuations")
+    assert words, f"{lang}: no continuation words"
+    bad = [w for w in words if not isinstance(w, str)]
+    assert not bad, f"{lang}: non-string entries (quote them): {bad}"
+
+
+@pytest.mark.parametrize("lang", ALL_LANGUAGES)
+def test_turn_taking_classifier(lang):
+    """The three verdicts must be reachable in every language."""
+    from turn_taking import classify_ending
+
+    pack = load_locale(lang)
+    words = {w.lower() for w in pack.raw("turn_taking.continuations")}
+    end = pack.text("turn_taking.sentence_end")
+    first = sorted(words)[0]
+
+    assert classify_ending(f"something {first}", words, end) == "unfinished"
+    assert classify_ending("something complete.", words, end) == "finished"
+    assert classify_ending("something ambiguous", words, end) == "unsure"
+    assert classify_ending("", words, end) == "unsure"

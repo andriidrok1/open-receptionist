@@ -57,6 +57,7 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Owner dashboard | works, both languages | browser check, no Cyrillic on the English one |
 | eval / simulate | work in both languages | dental_us 4/4, Ukrainian unchanged |
 | Telephony | **UNVERIFIED** | code wired, never tested on a real number |
+| Semantic end-of-turn | works, effect UNPROVEN | classifier tested; paired A/B was inconclusive |
 
 ---
 
@@ -127,6 +128,17 @@ it" cannot be told from "the agent copied it from an example". Enforced by
 
 **Model runs vary.** A full English eval gave 3/4 once and 4/4 on the re-run,
 same code. One green run is not proof.
+
+**Latency measurements need pairing and bucketing.** Two mistakes made in one
+sitting: comparing runs an hour apart caught the machine drifting rather than
+the change (the same code gave 3.1s and 5.7s), and averaging turns that call a
+tool with turns that do not hides everything, because a tool turn is two
+inference passes and several seconds slower by construction. Alternate the
+configurations back to back, and read the two buckets separately.
+
+**The caller's wait is ~3s and only ~1.1s of it is ours.** The rest is the model
+writing its reply. No amount of cleverness in turn-taking can win more than
+about a second — worth knowing before optimising it.
 
 ---
 

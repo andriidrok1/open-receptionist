@@ -33,6 +33,7 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     CancelFrame,
     EndFrame,
+    FunctionCallInProgressFrame,
     Frame,
     MetricsFrame,
     VADUserStoppedSpeakingFrame,
@@ -53,8 +54,14 @@ class CallTotals:
 
     started_at: float = field(default_factory=time.monotonic)
     replies: int = 0
-    #: Seconds between the caller falling silent and the first sound of the reply.
+    #: Seconds between the caller falling silent and the first sound of the
+    #: reply, split by whether the agent had to call a tool. Mixing them is
+    #: meaningless: a tool turn is two inference passes plus the lookup, so it
+    #: is several seconds slower by construction. Averaging the two produced a
+    #: number that swung between 3s and 9s depending on what the caller happened
+    #: to ask, and hid every real change underneath that swing.
     wait_times: list[float] = field(default_factory=list)
+    wait_times_with_tool: list[float] = field(default_factory=list)
     #: Time-to-first-byte per service, as pipecat reports it.
     ttfb: dict[str, list[float]] = field(default_factory=dict)
     prompt_tokens: int = 0
@@ -66,12 +73,19 @@ class CallTotals:
         return time.monotonic() - self.started_at
 
     def summary(self) -> dict:
+        def median(values):
+            v = sorted(values)
+            return round(v[len(v) // 2], 2) if v else None
+
         waits = sorted(self.wait_times)
         return {
             "duration_s": round(self.duration_s, 1),
             "replies": self.replies,
-            "wait_median_s": round(waits[len(waits) // 2], 2) if waits else None,
+            "wait_median_s": median(self.wait_times),
             "wait_worst_s": round(waits[-1], 2) if waits else None,
+            "wait_median_tool_s": median(self.wait_times_with_tool),
+            "replies_plain": len(self.wait_times),
+            "replies_with_tool": len(self.wait_times_with_tool),
             "ttfb_median_s": {
                 name: round(sorted(v)[len(v) // 2], 2) for name, v in self.ttfb.items() if v
             },
@@ -126,6 +140,7 @@ class CallMetrics(FrameProcessor):
         super().__init__(**kwargs)
         self._totals = CallTotals()
         self._silent_since: float | None = None
+        self._tool_this_turn = False
         self._on_finish = on_finish
         self._reported = False
 
@@ -135,11 +150,20 @@ class CallMetrics(FrameProcessor):
         if isinstance(frame, VADUserStoppedSpeakingFrame):
             # The clock the caller feels starts here, not when the LLM is asked.
             self._silent_since = time.monotonic()
+        elif isinstance(frame, FunctionCallInProgressFrame):
+            self._tool_this_turn = True
         elif isinstance(frame, BotStartedSpeakingFrame):
             if self._silent_since is not None:
-                self._totals.wait_times.append(time.monotonic() - self._silent_since)
+                waited = time.monotonic() - self._silent_since
+                bucket = (
+                    self._totals.wait_times_with_tool
+                    if self._tool_this_turn
+                    else self._totals.wait_times
+                )
+                bucket.append(waited)
                 self._totals.replies += 1
                 self._silent_since = None
+                self._tool_this_turn = False
         elif isinstance(frame, MetricsFrame):
             self._collect(frame)
         elif isinstance(frame, (EndFrame, CancelFrame)):
@@ -156,6 +180,15 @@ class CallMetrics(FrameProcessor):
                 self._totals.completion_tokens += item.value.completion_tokens
             elif isinstance(item, TTSUsageMetricsData):
                 self._totals.tts_characters += item.value
+
+    def report_now(self) -> None:
+        """Report from outside the pipeline.
+
+        A browser tab closing tears the worker down without an EndFrame ever
+        reaching here, so the call's numbers were lost — for most calls, since
+        people close the tab rather than pressing a button.
+        """
+        self._report()
 
     def _report(self) -> None:
         if self._reported:
@@ -184,7 +217,9 @@ def format_report(summary: dict) -> str:
     """The same numbers as a block of text, for a terminal."""
     lines = [
         f"call length      {summary['duration_s']}s, {summary['replies']} replies",
-        f"caller waits     median {summary['wait_median_s']}s, worst {summary['wait_worst_s']}s",
+        f"caller waits     plain {summary['wait_median_s']}s "
+        f"(x{summary['replies_plain']}), with a tool call "
+        f"{summary['wait_median_tool_s']}s (x{summary['replies_with_tool']})",
     ]
     for name, value in sorted(summary["ttfb_median_s"].items()):
         lines.append(f"  {name:<28} {value}s to first byte")
@@ -212,7 +247,8 @@ if __name__ == "__main__":  # quick check of the arithmetic, no pipeline needed
     t = CallTotals()
     t.started_at = time.monotonic() - 120
     t.wait_times = [2.1, 2.4, 1.9]
-    t.replies = 3
+    t.wait_times_with_tool = [4.8]
+    t.replies = 4
     t.prompt_tokens, t.completion_tokens, t.tts_characters = 12_000, 900, 1_400
     s = t.summary()
     p = load_pricing()
