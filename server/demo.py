@@ -28,7 +28,7 @@ HERE = Path(__file__).parent
 STATIC = HERE / "static"
 
 #: Tab order = the order of this list. The first one opens by default.
-DEMO_BUSINESSES = ["clinic", "emergency", "cleaning", "hotel", "barbershop"]
+DEMO_BUSINESSES = ["dental_us", "clinic", "emergency", "cleaning", "hotel", "barbershop"]
 
 BASE_PORT = int(os.getenv("DEMO_BASE_PORT", "7860"))
 DEMO_PORT = int(os.getenv("DEMO_PORT", "8080"))

@@ -344,7 +344,7 @@ def free_slots(
 
 # ------------------------------ availability ------------------------------
 
-_MONTHS = tuple(L.raw("numbers.months_genitive"))
+_MONTHS = tuple(L.raw("numbers.months"))
 #: Forms of the billing unit, in the order the plural rule expects.
 _UNIT_FORMS = {k: tuple(v) for k, v in L.raw("numbers.units").items()}
 _PLURAL_RULE = L.text("numbers.plural_rule")

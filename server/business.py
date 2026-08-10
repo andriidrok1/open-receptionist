@@ -96,6 +96,10 @@ class IntakeField:
 class BookingConfig:
     """How this particular business takes bookings."""
 
+    # The language this business speaks. Kept here as well as on Business so
+    # that hours can be rendered per business: the demo showcase loads five
+    # configs in one process, and they will not all speak the same language.
+    language: str = DEFAULT_LANGUAGE
     enabled: bool = True
     granularity: str = "nights"  # nights | slots
     action: str = "бронювання"  # "booking" / "appointment" — used in the prompt
@@ -158,23 +162,38 @@ class BookingConfig:
         h = self.hours_for(day)
         return bool(h) and h[0] == time(0, 0) and h[1] >= time(23, 59)
 
+    @property
+    def _pack(self):
+        """This business's own language pack (cached in locale_pack)."""
+        return load_locale(self.language)
+
+    def _hours_text(self, raw) -> str:
+        """One day's hours, spoken the way this language writes a clock.
+
+        The YAML always stores 24-hour ranges because that is unambiguous to
+        edit; how they are SHOWN is a property of the language. A US practice
+        showing "08:00-17:00" is a small wrongness that adds up.
+        """
+        start_s, _, end_s = str(raw).partition("-")
+        return f"{self._pack.time(start_s.strip())}–{self._pack.time(end_s.strip())}"
+
     def hours_compact(self) -> str:
-        """Opening hours for the demo card: "mon–fri 09:00–19:00 · sun closed".
+        """Opening hours for the demo card: "Mon–Fri 8 AM–5 PM · Sun closed".
         Adjacent identical days are merged, otherwise it becomes a seven-line
         wall of text."""
         if not self.hours:
             return ""
-        short = tuple(L.raw("calendar.weekdays_short"))
+        short = tuple(self._pack.raw("calendar.weekdays_short"))
         groups: list[list] = []
         for i, key in enumerate(WEEKDAYS):
             raw = self.hours.get(key)
-            val = str(raw).replace("-", "–") if raw else L.text("calendar.closed")
+            val = self._hours_text(raw) if raw else self._pack.text("calendar.closed")
             if groups and groups[-1][2] == val:
                 groups[-1][1] = i
             else:
                 groups.append([i, i, val])
-        if len(groups) == 1 and groups[0][2].startswith("00:00"):
-            return L.text("calendar.round_clock")
+        if len(groups) == 1 and str(self.hours.get("mon", "")).startswith("00:00"):
+            return self._pack.text("calendar.round_clock")
         return " · ".join(
             f"{short[a] if a == b else short[a] + '–' + short[b]} {val}" for a, b, val in groups
         )
@@ -184,8 +203,9 @@ class BookingConfig:
         parts = []
         for i, key in enumerate(WEEKDAYS):
             raw = self.hours.get(key)
-            closed = L.text("calendar.closed")
-            parts.append(f"{WEEKDAY_NAMES[i]} — {closed if not raw else str(raw).replace('-', '–')}")
+            closed = self._pack.text("calendar.closed")
+            names = self._pack.raw("calendar.weekdays")
+            parts.append(f"{names[i]} — {closed if not raw else self._hours_text(raw)}")
         return "; ".join(parts)
 
 
@@ -316,6 +336,7 @@ def load_business(key: str | None = None) -> Business:
     b = d.get("booking") or {}
     cust = d.get("customer") or {}
     booking = BookingConfig(
+        language=d.get("language") or DEFAULT_LANGUAGE,
         enabled=bool(b.get("enabled", True)),
         granularity=b.get("granularity", "nights"),
         action=b.get("action", "бронювання"),
@@ -384,8 +405,6 @@ BUSINESS = load_business()
 
 #: The active language pack, named by the business config. Loaded after the
 #: business for that reason, and used from function bodies only.
-#: Caveat: the demo showcase loads several configs in one process, so if they
-#: ever declare different languages, the labels it renders follow this one.
 L = load_locale(BUSINESS.language)
 WEEKDAY_NAMES = tuple(L.raw("calendar.weekdays"))
 

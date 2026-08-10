@@ -129,7 +129,7 @@ def test_calendar_shapes(lang):
     pack = load_locale(lang)
     assert len(pack.raw("calendar.weekdays")) == 7
     assert len(pack.raw("calendar.weekdays_short")) == 7
-    assert len(pack.raw("numbers.months_genitive")) == 12
+    assert len(pack.raw("numbers.months")) == 12
     assert pack.raw("numbers.plural_rule") in ("slavic", "english")
 
 
@@ -149,3 +149,37 @@ def test_unit_forms_match_the_plural_rule(lang):
 def test_country_code_looks_like_iso(lang):
     code = load_locale(lang).text("settings.default_country")
     assert len(code) == 2 and code.isupper()
+
+
+def _all_text(pack) -> str:
+    return "\n".join(
+        pack.raw(k) for k in REQUIRED_KEYS if isinstance(pack.raw(k), str)
+    )
+
+
+@pytest.mark.skipif("en" not in ALL_LANGUAGES, reason="no English pack")
+def test_english_pack_has_no_leftover_cyrillic():
+    """A forgotten Ukrainian line in the English pack is invisible by eye.
+
+    It would not crash anything either — the agent would simply say one
+    paragraph in the wrong language, halfway through a call.
+    """
+    import re
+
+    found = re.findall(r"[Ѐ-ӿ]+", _all_text(load_locale("en")))
+    assert not found, f"Cyrillic left in the English pack: {set(found)}"
+
+
+@pytest.mark.parametrize("lang", ALL_LANGUAGES)
+def test_pack_carries_the_rules_that_are_not_about_language(lang):
+    """Some rules are properties of a voice agent, not of a language.
+
+    A new pack is written from scratch, which makes it easy to drop one of them
+    by accident — and each was added after a specific failure on a live call.
+    """
+    text = _all_text(load_locale(lang)).lower()
+    assert "break time=" in text, "the pause tag rule is missing"
+    assert "alternatives" in text, "the 'never invent free times' rule is missing"
+    assert "error" in text, "the 'an error is not a refusal' rule is missing"
+    assert "take_message" in text, "the escalation tool is never mentioned"
+    assert "create_booking" in text, "the booking tool is never mentioned"

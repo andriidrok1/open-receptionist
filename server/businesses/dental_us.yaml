@@ -1,0 +1,113 @@
+# A US dental practice — the first English-speaking business.
+#
+# Written for an American practice rather than translated from the Ukrainian
+# clinic: different services, different price level, different hours, and a
+# receptionist who talks like one.
+#
+# Note on `customer`: the three forms exist because Slavic languages decline
+# nouns. English uses the same word in all three slots, which is fine — the
+# field is filled in by the language, not by the code.
+
+key: dental_us
+language: en
+country: US
+tz: America/Los_Angeles
+
+name: Bright Smile Dental
+brand: Bright Smile Dental
+city: San Francisco, CA
+agent_name: Emma
+persona: the receptionist
+tone: Be warm and quick. You're busy but never rushed with the person on the line.
+currency: "$"
+
+customer: {nom: patient, gen: patient, dat: patient}
+
+speech:
+  bad: >-
+    Thank you for calling Bright Smile Dental. I would be happy to assist you
+    with scheduling an appointment for a professional cleaning on Tuesday at ten
+    o'clock, which is priced at one hundred and eighty dollars.
+  good: >-
+    Sure — Tuesday at ten works. A cleaning's a hundred and eighty. Want me to
+    book it?
+  recap: >-
+    So that's a cleaning, Tuesday at ten, for Sarah — a hundred and eighty.
+    Sound right?
+
+escalation_examples: insurance coverage, dental emergencies, anything about treatment itself
+
+knowledge: |
+  Bright Smile Dental, a family dental practice in San Francisco.
+
+  Services and prices:
+  - New patient exam — $95 (30 minutes). Includes X-rays.
+  - Cleaning — $180 (1 hour).
+  - Filling — $250 (1 hour).
+  - Extraction — $320 (1 hour).
+
+  Hours: Monday to Friday 8am to 5pm, Saturday 9am to 1pm, closed Sunday.
+  Address: 1200 Irving Street, San Francisco.
+  Parking on the street; there's a lot on 19th Avenue two blocks away.
+
+  Payment: cards and cash. We are not in network with any insurance plan, but we
+  give patients an itemised receipt to submit themselves.
+
+  You do NOT give dental advice of any kind, and you do not say whether
+  something is an emergency. Anything clinical goes to a callback.
+
+keyterms: [cleaning, filling, extraction, exam, X-rays, Bright Smile]
+
+booking:
+  granularity: slots
+  action: appointment
+  action_gen: appointments
+  verb: book
+  resource_param: service
+  resource_label: service
+  ref_prefix: "APT-"
+  slot_step_min: 30
+  horizon_days: 90
+  hours:
+    mon: "08:00-17:00"
+    tue: "08:00-17:00"
+    wed: "08:00-17:00"
+    thu: "08:00-17:00"
+    fri: "08:00-17:00"
+    sat: "09:00-13:00"
+    sun: null
+  resources:
+    - key: exam
+      label: New patient exam
+      aliases: [exam, checkup, check-up, first visit, new patient]
+      price: 95
+      duration_min: 30
+      capacity: 2
+    - key: cleaning
+      label: Cleaning
+      aliases: [cleaning, hygiene, teeth cleaned, scale and polish]
+      price: 180
+      duration_min: 60
+      capacity: 2
+    - key: filling
+      label: Filling
+      aliases: [filling, cavity, fill a tooth]
+      price: 250
+      duration_min: 60
+      capacity: 1
+    - key: extraction
+      label: Extraction
+      aliases: [extraction, pull a tooth, take a tooth out]
+      price: 320
+      duration_min: 60
+      capacity: 1
+
+demo:
+  tab: Dental (US)
+  intro: >-
+    Emma answers the phone at a San Francisco dental practice: she books
+    appointments, quotes prices, and passes anything clinical to a human.
+  try:
+    - I'd like to come in for a cleaning
+    - How much is a filling?
+    - Are you open on Sunday?

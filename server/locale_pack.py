@@ -23,7 +23,7 @@ startup — a prompt silently missing a paragraph is far worse than a crash.
 
 from __future__ import annotations
 
-from datetime import time as _time
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -43,7 +43,7 @@ REQUIRED_KEYS = (
     "calendar.closed",
     "calendar.round_clock",
     "numbers.plural_rule",
-    "numbers.months_genitive",
+    "numbers.months",
     "numbers.units",
     "spoken.money",
     "spoken.date",
@@ -183,6 +183,7 @@ class Locale:
             ) from e
 
 
+@lru_cache(maxsize=None)
 def load_locale(lang: str | None = None) -> Locale:
     lang = lang or DEFAULT_LANGUAGE
     path = LOCALES_DIR / f"{lang}.yaml"
