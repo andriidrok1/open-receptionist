@@ -178,9 +178,23 @@ def test_country_code_looks_like_iso(lang):
 
 
 def _all_text(pack) -> str:
-    return "\n".join(
-        pack.raw(k) for k in REQUIRED_KEYS if isinstance(pack.raw(k), str)
-    )
+    """Every piece of text in the pack, lists and mappings included.
+
+    Strings only was not enough: months, weekday names, unit forms and
+    placeholder names are all lists, and those are exactly the values a caller
+    hears most often and the easiest to copy across when writing a new pack from
+    an old one. A pack with "Понеділок" in an English weekday list passed.
+    """
+    def flatten(value):
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, dict):
+            return [x for v in value.values() for x in flatten(v)]
+        if isinstance(value, (list, tuple)):
+            return [x for v in value for x in flatten(v)]
+        return []
+
+    return "\n".join(x for k in REQUIRED_KEYS for x in flatten(pack.raw(k)))
 
 
 @pytest.mark.skipif("en" not in ALL_LANGUAGES, reason="no English pack")

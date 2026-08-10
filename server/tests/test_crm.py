@@ -5,9 +5,7 @@ agent walked into. They run in under a second, which is the point: the model
 layer is slow and costs money, so anything decidable without it is decided here.
 """
 
-import os
 import sys
-import tempfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -15,11 +13,6 @@ import pytest
 
 SERVER = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SERVER))
-
-# A throwaway database, chosen before crm is imported: it fixes the path at
-# import time. Without this the tests would wipe a real business's records.
-os.environ.setdefault("BUSINESS", "hotel")
-os.environ["CRM_DB"] = str(Path(tempfile.mkdtemp()) / "test.db")
 
 import crm  # noqa: E402
 from business import BUSINESS  # noqa: E402
@@ -135,14 +128,33 @@ def test_spoken_summary_exists_when_available():
     assert out["spoken"], "the agent has nothing to read out"
 
 
-def test_spoken_summary_agrees_with_the_stored_numbers():
+def _numbers(text: str) -> list[int]:
+    import re
+
+    return [int(x) for x in re.findall(r"\d+", text)]
+
+
+@pytest.mark.parametrize("nights", [1, 2, 3, 7])
+def test_spoken_summary_agrees_with_the_stored_numbers(nights):
     """The agent said "two nights, 2400" for a one-night booking at 1200.
 
-    The summary is built here precisely so the model does no arithmetic.
+    Asserting `str(units) in spoken` proved nothing: the sentence already holds
+    the two dates, the count and the price, so a wrong count of 3 matched the
+    "13" of a date. Here every number in the spoken sentence has to be one the
+    tool actually returned — which is the property that was violated.
     """
-    out = crm.check_availability(ROOM, iso(1), iso(3))
-    assert str(out["units"]) in out["spoken"]
-    assert str(out["total_price"]) in out["spoken"]
+    out = crm.check_availability(ROOM, iso(1), iso(1 + nights))
+    spoken = _numbers(out["spoken"])
+    expected = {
+        out["units"],
+        out["total_price"],
+        int(out["starts_at"][8:10]),
+        int(out["ends_at"][8:10]),
+    }
+    assert out["units"] in spoken, f"the number of nights is not said: {out['spoken']}"
+    assert out["total_price"] in spoken, f"the price is not said: {out['spoken']}"
+    stray = [n for n in spoken if n not in expected]
+    assert not stray, f"{out['spoken']} contains numbers the tool never returned: {stray}"
 
 
 @pytest.mark.parametrize("nights,expected", [(1, "ніч"), (2, "ночі"), (5, "ночей"), (21, "ніч")])
@@ -167,8 +179,8 @@ def test_booking_refuses_a_placeholder_name():
     assert not out["success"] and out["error"]
 
 
-def test_capacity_is_not_exceeded():
-    """Seven simultaneous bookings against three places all used to succeed."""
+def test_capacity_is_not_exceeded_sequentially():
+    """The plain arithmetic: more requests than places, one at a time."""
     resource = BUSINESS.booking.resources[-1]
     start, end = iso(20), iso(21)
     made = 0
@@ -176,3 +188,67 @@ def test_capacity_is_not_exceeded():
         out = crm.create_booking(resource.label, start, f"Тест Тестенко{i}", "0632096974", end)
         made += bool(out.get("success"))
     assert made == resource.capacity
+
+
+def test_capacity_is_not_exceeded_concurrently():
+    """The actual guard: simultaneous calls racing for the last place.
+
+    The sequential test above passes even with the transaction removed — it
+    measures arithmetic, not the race. This one measures the race: seven
+    concurrent bookings against three places all used to succeed, and removing
+    BEGIN IMMEDIATE makes this fail while everything else stays green.
+    """
+    import concurrent.futures
+
+    resource = BUSINESS.booking.resources[0]
+    start, end = iso(30), iso(31)
+    attempts = resource.capacity + 7
+
+    def book(i):
+        return crm.create_booking(
+            resource.label, start, f"Тест Паралельний{i}", "0632096974", end
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(attempts) as pool:
+        results = list(pool.map(book, range(attempts)))
+
+    succeeded = sum(bool(r.get("success")) for r in results)
+    assert succeeded == resource.capacity, (
+        f"{succeeded} of {attempts} concurrent bookings went through, "
+        f"capacity is {resource.capacity}"
+    )
+
+
+# ---------------------------- callback requests ----------------------------
+#
+# Every escalation goes through take_message — the path the agent takes instead
+# of inventing an answer — and none of it had a test.
+
+
+def test_take_message_records_a_request():
+    out = crm.take_message("Тарас Мельник", "0632096974", "питання про парковку")
+    assert out["success"] and out["note"]
+    assert crm.list_messages()[0]["phone"] == "+380632096974"
+
+
+def test_take_message_validates_the_phone():
+    out = crm.take_message("Тарас Мельник", "нуль шість сім", "питання")
+    assert not out["success"] and out["error"]
+
+
+def test_take_message_needs_a_topic():
+    out = crm.take_message("Тарас Мельник", "0632096974", "  ")
+    assert not out["success"] and out["error"]
+
+
+def test_take_message_without_a_name_is_labelled_not_invented():
+    """It falls back to a generic word on purpose, unlike a booking.
+
+    A callback request with no name is still useful — someone rings back on that
+    number. A booking with no name is not, which is why create_booking refuses
+    the same stub this one accepts. Worth pinning so the two never converge by
+    accident.
+    """
+    out = crm.take_message("", "0632096974", "питання")
+    assert out["success"]
+    assert crm.list_messages()[0]["customer_name"]

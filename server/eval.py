@@ -33,7 +33,9 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 from datetime import date, timedelta
+from pathlib import Path
 
 # --business has to be handled BEFORE importing business.py: the business is
 # selected at import time.
@@ -46,6 +48,14 @@ else:
     _BUSINESS_ARG = None
 if _BUSINESS_ARG and _BUSINESS_ARG != "all":
     os.environ["BUSINESS"] = _BUSINESS_ARG
+
+# A throwaway database, chosen before crm is imported (it fixes the path at
+# import time). Without it the scenarios wrote their stubs into the business's
+# real database, and a run interrupted mid-way left them on the dashboard.
+os.environ.setdefault(
+    "CRM_DB",
+    str(Path(tempfile.gettempdir()) / f"eval_{os.environ.get('BUSINESS', 'hotel')}.db"),
+)
 
 import agent_tools  # noqa: E402
 import crm  # noqa: E402
@@ -101,7 +111,7 @@ def say_time(hour: int) -> str:
 
 def next_weekday(weekday: int, min_days: int = 1) -> date:
     """The next occurrence of a weekday (0 = Monday)."""
-    d = date.today() + timedelta(days=min_days)
+    d = BUSINESS.today() + timedelta(days=min_days)
     while d.weekday() != weekday:
         d += timedelta(days=1)
     return d
@@ -188,7 +198,7 @@ def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool
 
 # ------------------------ scenarios: nights ------------------------
 
-H_IN = date.today() + timedelta(days=35)
+H_IN = BUSINESS.today() + timedelta(days=35)
 H_OUT = H_IN + timedelta(days=3)
 H_PHONE = "0677774567"
 # The store keeps E.164 now, so the expectation goes through the same
@@ -304,8 +314,8 @@ HOTEL_SCENARIOS = {
 # scenario failed on "we do not book that far ahead" rather than on what it is
 # meant to check.
 S_DAY = next_weekday(1, min_days=2)
-if (S_DAY - date.today()).days > BUSINESS.booking.horizon_days:
-    S_DAY = date.today() + timedelta(days=1)
+if (S_DAY - BUSINESS.today()).days > BUSINESS.booking.horizon_days:
+    S_DAY = BUSINESS.today() + timedelta(days=1)
 S_HOUR = 10
 S_BUSY_HOUR = 12
 S_PHONE = "0677774567"
@@ -377,20 +387,20 @@ def _closed_case(service_phrase: str) -> tuple[str, str]:
     schedule: for a clinic that is Sunday, for a barbershop open every day it is
     late in the evening."""
     for ahead in range(1, 8):
-        d = date.today() + timedelta(days=ahead)
+        d = BUSINESS.today() + timedelta(days=ahead)
         if BUSINESS.booking.hours_for(d) is None:
             return (
                 f"Запишіть мене на {service_phrase} {say_day(d)}, {say_time(11)}.",
                 "Вихідний день: запис не створюється",
             )
-    if not BUSINESS.booking.is_round_clock(date.today()):
+    if not BUSINESS.booking.is_round_clock(BUSINESS.today()):
         late = next_weekday(1, min_days=2)
         return (
             f"Запишіть мене на {service_phrase} {say_day(late)}, {say_time(22)}.",
             "Час після закриття: запис не створюється",
         )
     # A 24/7 business is never closed, so aim at a different boundary: horizon.
-    far = date.today() + timedelta(days=BUSINESS.booking.horizon_days + 25)
+    far = BUSINESS.today() + timedelta(days=BUSINESS.booking.horizon_days + 25)
     return (
         f"Запишіть мене на {service_phrase} {say_day(far)}, {say_time(11)}.",
         "Занадто далеко наперед: запис не створюється",

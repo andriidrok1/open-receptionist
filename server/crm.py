@@ -35,13 +35,13 @@ from pathlib import Path
 
 from zoneinfo import ZoneInfo
 
-from business import BUSINESS, L, slot_grid
+from business import BUSINESS, CLI_CRM_DB, L, slot_grid
 
 BIZ = BUSINESS
 BOOK = BUSINESS.booking
 
 # Every business gets its own database: hotel.db, clinic.db, barbershop.db.
-DB_PATH = Path(os.getenv("CRM_DB") or Path(__file__).parent / f"{BIZ.key}.db")
+DB_PATH = Path(CLI_CRM_DB or os.getenv("CRM_DB") or Path(__file__).parent / f"{BIZ.key}.db")
 
 _ISO_MIN = "%Y-%m-%dT%H:%M"
 

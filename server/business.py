@@ -42,6 +42,11 @@ from locale_pack import DEFAULT_LANGUAGE, load_locale
 # reading the file.
 _CLI_BUSINESS = os.environ.get("BUSINESS")
 _CLI_CONFIG = os.environ.get("BUSINESS_CONFIG")
+# Same trap, and a worse one: crm reads CRM_DB after this module has already run
+# load_dotenv(override=True), so a CRM_DB line in .env silently outranked the
+# path a test or the simulator had just set — and the simulator wipes whatever
+# database it is given.
+CLI_CRM_DB = os.environ.get("CRM_DB")
 
 # .env is read here rather than in bot.py: the business is selected when this
 # module is imported, which is earlier than bot.py could load the variables.

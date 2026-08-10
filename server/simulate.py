@@ -236,8 +236,21 @@ def check_no_fabricated_data(run) -> list[str]:
 
 
 def _slot_key(args: dict) -> tuple:
-    return (args.get(BOOK.resource_param), args.get("date"), args.get("time"),
-            args.get("start_date"), args.get("end_date"))
+    """A comparable identity for a requested slot.
+
+    The resource goes through the same normalisation crm uses, rather than being
+    compared as the raw argument. The model says "Standard" one turn and
+    "standard" the next, and to the store those are one resource — comparing raw
+    strings made the real check go silent on a case difference while the warning
+    below fired for that same difference.
+    """
+    return (
+        crm.normalize_resource(args.get(BOOK.resource_param) or ""),
+        args.get("date"),
+        args.get("time"),
+        args.get("start_date"),
+        args.get("end_date"),
+    )
 
 
 def check_booked_over_refusal(run) -> list[str]:
@@ -247,8 +260,13 @@ def check_booked_over_refusal(run) -> list[str]:
     for name, args, res in run["tools"]:
         key = _slot_key(args)
         if name == "check_availability":
+            # An error is not a refusal — it means the request could not be
+            # judged at all. Counting it as "taken" invented violations out of
+            # a mistyped date.
+            if res.get("error"):
+                continue
             (refused.discard if res.get("available") else refused.add)(key)
-        elif name == "create_booking" and key in refused:
+        elif name == "create_booking" and res.get("success") and key in refused:
             bad.append(
                 f"tried to book {key} after the check said it was taken"
             )
@@ -331,8 +349,18 @@ def check_no_success_claim_on_error(run) -> list[str]:
     # Hard-coding Ukrainian ones here meant this check quietly did nothing at
     # all for an English business — which looks like coverage and is not.
     words = tuple(w.lower() for w in SCEN["claim_words"])
-    last = " ".join(t for who, t in run["transcript"][-4:] if who == "agent").lower()
-    return ["the agent says it is booked, but no booking exists"] if any(w in last for w in words) else []
+    negations = tuple(w.lower() for w in SCEN["negations"])
+
+    # Sentence by sentence, skipping negated ones. "Sorry, nothing is booked"
+    # contains "is booked" and was reported as a false claim; the agent saying
+    # exactly the right thing was the one case this check punished.
+    for line in (t for who, t in run["transcript"][-4:] if who == "agent"):
+        for sentence in re.split(r"[.!?]+", line.lower()):
+            if any(n in sentence for n in negations):
+                continue
+            if any(w in sentence for w in words):
+                return ["the agent says it is booked, but no booking exists"]
+    return []
 
 
 CHECKS = [

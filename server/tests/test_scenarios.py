@@ -22,7 +22,7 @@ BUSINESSES_DIR = SERVER / "businesses"
 ALL_SCENARIOS = sorted(p.stem for p in SCENARIOS_DIR.glob("*.yaml"))
 
 REQUIRED = ("facts", "caller_prompt", "greeting_hint", "end_marker", "personas",
-            "claim_words", "distinctive")
+            "claim_words", "distinctive", "negations")
 REQUIRED_FACTS = ("name", "phone", "address")
 
 
@@ -92,16 +92,30 @@ def test_caller_facts_appear_nowhere_the_agent_can_read_them(lang):
     check was blind exactly where it mattered.
     """
     facts = load(lang)["facts"]
-    haystack = "\n".join(
-        p.read_text(encoding="utf-8")
-        for p in [*LOCALES_DIR.glob("*.yaml"), *BUSINESSES_DIR.glob("*.yaml")]
+    # The scenarios file itself counts: greeting_hint goes to the agent as a
+    # developer message, so a fact placed there is a fact the agent can read.
+    scenario_text = "\n".join(
+        str(v) for k, v in load(lang).items() if k not in ("facts", "distinctive")
+    )
+    haystack = (
+        "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in [*LOCALES_DIR.glob("*.yaml"), *BUSINESSES_DIR.glob("*.yaml")]
+        )
+        + scenario_text
     ).lower()
 
     distinctive = load(lang)["distinctive"]
     leaked = [token for token in distinctive if token.lower() in haystack]
     assert not leaked, f"{lang}: caller facts leak into prompts — {leaked}"
 
-    # And the list has to actually cover the facts, or it proves nothing.
+    # The list has to cover the facts in BOTH directions, or it proves nothing:
+    # every token must come from a fact, and every fact must be represented.
+    # Written by the same hand as the facts, a forgotten token silently blinds
+    # the check exactly where a leak would matter.
     joined = " ".join(str(v) for v in facts.values()).lower()
     for token in distinctive:
         assert token.lower() in joined, f"{lang}: {token!r} is not part of any fact"
+    for key, value in facts.items():
+        covered = any(token.lower() in str(value).lower() for token in distinctive)
+        assert covered, f"{lang}: no distinctive token covers the caller's {key}"
