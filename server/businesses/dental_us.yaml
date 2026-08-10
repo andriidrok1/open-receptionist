@@ -12,6 +12,9 @@ key: dental_us
 language: en
 country: US
 tz: America/Los_Angeles
+# Rachel, a premade ElevenLabs voice. A placeholder: the Ukrainian voice was
+# chosen by ear through voice_lab.py and this one has not been yet.
+voice_id: 21m00Tcm4TlvDq8ikWAM
 
 name: Bright Smile Dental
 brand: Bright Smile Dental

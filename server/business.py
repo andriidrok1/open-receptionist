@@ -230,6 +230,7 @@ class Business:
     demo_intro: str  # what the demo page says about this business
     demo_try: tuple[str, ...]  # the "try saying" suggestions
     language: str  # which language pack the agent speaks (locales/<lang>.yaml)
+    voice_id: str  # ElevenLabs voice; empty means the language pack's default
     country: str  # ISO 3166-1 alpha-2, used to parse phone numbers
     tz: str  # the timezone of the BUSINESS, not of the server
     booking: BookingConfig
@@ -410,6 +411,7 @@ def load_business(key: str | None = None) -> Business:
         demo_intro=((d.get("demo") or {}).get("intro") or "").strip(),
         demo_try=tuple((d.get("demo") or {}).get("try") or ()),
         language=lang,
+        voice_id=(d.get("voice_id") or "").strip(),
         # Falls back to the language pack's default: a Ukrainian-speaking
         # business is almost certainly in Ukraine, and a config that forgets the
         # field should still parse phone numbers correctly.

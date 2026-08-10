@@ -286,10 +286,16 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     if elevenlabs_key:
         voice_settings = dict(
-            # A voice is ultimately a business's choice, but the default has to
-            # at least be native to the language — an English voice reading
-            # Ukrainian guesses its way through every stressed syllable.
-            voice=os.getenv("ELEVENLABS_VOICE_ID") or L.text("settings.default_voice_id"),
+            # Order matters: the business's own choice, then a global override
+            # for experiments, then the language default. The other way round —
+            # env first — meant one line in .env pinned a Ukrainian voice onto
+            # every business, including the English one, which is precisely the
+            # bug this whole layer exists to prevent.
+            voice=(
+                BUSINESS.voice_id
+                or os.getenv("ELEVENLABS_VOICE_ID")
+                or L.text("settings.default_voice_id")
+            ),
             model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
             language=speech_language,
             speed=float(os.getenv("ELEVENLABS_SPEED", "0.95")),
