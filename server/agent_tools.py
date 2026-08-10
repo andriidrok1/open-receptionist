@@ -1,13 +1,18 @@
-"""agent_tools.py — інструменти агента, зібрані з конфігу закладу.
+"""agent_tools.py — the agent's tools, assembled from the business config.
 
-Одне джерело правди для двох споживачів: живого бота (bot.py) і текстового
-eval'а (eval.py). Раніше схеми жили в bot.py, а їх виконання дублювалось в
-eval.py окремим маппінгом — і при кожній зміні аргументів вони розповзались.
+One source of truth for two consumers: the live bot (bot.py) and the text-level
+evaluation (eval.py). The schemas used to live in bot.py while eval.py executed
+them through a separate mapping of its own — and the two drifted apart every
+time an argument changed.
 
-Набір інструментів залежить від закладу:
-    booking.enabled=false → лише take_message (чистий довідковий ресепшн);
-    granularity=nights    → check_availability(дата заїзду, дата виїзду, ...);
-    granularity=slots     → check_availability(дата, час, послуга).
+Which tools exist depends on the business:
+    booking.enabled=false → take_message only (a pure information desk);
+    granularity=nights    → check_availability(start date, end date, ...);
+    granularity=slots     → check_availability(date, time, service).
+
+Note on language: the `description` strings below are read by the model, so they
+stay in the business's language until the locale layer lands. Everything that is
+only read by humans is in English.
 """
 
 from business import BUSINESS
@@ -21,6 +26,7 @@ BOOK = BUSINESS.booking
 
 _OPTIONAL_INTAKE = {f.key for f in BOOK.intake if not f.required}
 
+# TODO(locale): model-facing text.
 PHONE_DESC = (
     "Номер телефону ВИКЛЮЧНО цифрами, напр. 0671234567. "
     "Ніколи не передавай словами («нуль шість сім») — тільки цифри."
@@ -28,8 +34,11 @@ PHONE_DESC = (
 
 
 def _resource_prop() -> dict:
-    """Перелік варіантів людськими назвами — модель мапить на них усну мову
-    точніше, ніж на технічні ключі; ключ підставить crm.normalize_resource."""
+    """The options as human-readable labels.
+
+    The model maps spoken language onto those far more accurately than onto
+    technical keys; crm.normalize_resource turns the label back into a key.
+    """
     return {
         "type": "string",
         "enum": [r.label for r in BOOK.resources],
@@ -38,7 +47,7 @@ def _resource_prop() -> dict:
 
 
 def _when_props() -> dict:
-    """Аргументи часу — різні для двох моделей запису."""
+    """Time arguments — different for the two booking models."""
     if BOOK.is_slots:
         return {
             "date": {"type": "string", "description": "Дата візиту у форматі РРРР-ММ-ДД"},
@@ -69,8 +78,11 @@ def _booking_props() -> dict:
 
 
 def _intake_props() -> dict:
-    """Поля галузі (адреса, тип роботи) — окремими аргументами, щоб модель не
-    ховала їх у вільному тексті, звідки їх потім не дістати."""
+    """Industry-specific fields (address, what happened) as separate arguments.
+
+    Separate, so the model cannot bury them in free text where they cannot be
+    recovered afterwards.
+    """
     return {
         f.key: {
             "type": "string",
@@ -132,7 +144,7 @@ def tools_schema() -> ToolsSchema:
 
 
 def _when(args: dict) -> tuple[str, str | None]:
-    """Аргументи моделі → (start, end) у форматі, який розуміє crm."""
+    """The model's arguments → (start, end) in the form crm understands."""
     if BOOK.is_slots:
         return f"{(args.get('date') or '').strip()}T{(args.get('time') or '').strip()}", None
     return args.get("start_date"), args.get("end_date")
@@ -148,7 +160,7 @@ def _party(args: dict) -> int:
 
 
 def call_tool(name: str, args: dict) -> dict:
-    """Виконати інструмент. Синхронно — і бот, і eval ходять сюди."""
+    """Execute a tool. Synchronous — both the bot and the evaluation come here."""
     if name == "check_availability":
         start, end = _when(args)
         return crm.check_availability(
@@ -170,17 +182,20 @@ def call_tool(name: str, args: dict) -> dict:
         )
     if name == "take_message":
         return crm.take_message(args.get("customer_name"), args.get("phone"), args.get("topic"))
-    return {"error": f"невідомий інструмент {name}"}
+    return {"error": f"невідомий інструмент {name}"}  # TODO(locale): model-facing
 
 
 def register(llm, logger=None) -> None:
-    """Прив'язати хендлери до LLM-сервісу pipecat (шлях живого бота).
+    """Bind the handlers to a pipecat LLM service (the live bot's path).
 
-    Кожен виклик пишеться в журнал подій: демо-сторінка робить з нього стрічку
-    «що зробила Оксана». Через RTVI це не працює — server-message із хвоста
-    пайплайна до клієнта не доходить, а вигадувати обхід заради демо дорожче,
-    ніж рядок у базі, який згодом стане журналом дзвінків для закладу.
-    Eval сюди не заходить (він кличе call_tool напряму), тож тести не засмічує.
+    Every call is written to the event log, which the demo page turns into a
+    feed of "what the agent just did". This cannot be done over RTVI: a server
+    message sent from the tail of the pipeline never reaches the client, and
+    inventing a way around that purely for the demo costs more than one row in a
+    table which will later become the business's own call log.
+
+    The evaluation harness does not come through here (it calls call_tool
+    directly), so tests do not pollute the log.
     """
 
     def make(name: str):

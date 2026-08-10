@@ -1,12 +1,12 @@
-"""run_demo.py — підняти демо цілком: по боту на кожну галузь + вітрину.
+"""run_demo.py — bring the whole demo up: one bot per industry, plus the showcase.
 
     python run_demo.py            → http://localhost:8080
 
-Кожен бот живе в своєму процесі на своєму порту (див. demo.py: один процес =
-один заклад). Падіння одного не роняє решту — на показі це важливіше за
-елегантність.
+Each bot lives in its own process on its own port (see demo.py: one process =
+one business). One of them crashing does not take the rest down, which during a
+demo matters more than elegance.
 
-Ctrl+C гасить усе разом.
+Ctrl+C stops everything.
 """
 
 import os
@@ -24,10 +24,11 @@ PYTHON = sys.executable
 
 
 def prune_old(days: int = 1) -> None:
-    """Почистити демо-бази від старих записів.
+    """Clear old records out of the demo databases.
 
-    Інакше через тиждень показів демо-клініка «забита» і бот усім відмовляє —
-    найгірше, що може статись під час розмови з власником.
+    Otherwise, after a week of demos the clinic is fully booked and the bot
+    turns everyone away — the worst possible thing to happen while a business
+    owner is listening.
     """
     for card in CARDS:
         path = demo_db(card["key"])
@@ -42,7 +43,7 @@ def prune_old(days: int = 1) -> None:
                     )
                 conn.commit()
         except sqlite3.OperationalError:
-            pass  # база ще без таблиць — нічого чистити
+            pass  # the database has no tables yet — nothing to clean
 
 
 def start_bot(card: dict) -> subprocess.Popen:
@@ -65,9 +66,9 @@ def main() -> int:
     procs = []
     for card in CARDS:
         procs.append(start_bot(card))
-        print(f"  бот {card['key']:11} → :{card['port']}")
+        print(f"  bot {card['key']:11} → :{card['port']}")
 
-    print(f"\n  вітрина → http://localhost:{DEMO_PORT}\n  Ctrl+C щоб зупинити все\n")
+    print(f"\n  showcase → http://localhost:{DEMO_PORT}\n  Ctrl+C to stop everything\n")
 
     import uvicorn
 
@@ -83,7 +84,8 @@ def main() -> int:
                 p.kill()
 
     try:
-        # Дати ботам підняти порти, перш ніж вітрина почне їх пропонувати.
+        # Give the bots a moment to claim their ports before the showcase starts
+        # pointing people at them.
         time.sleep(2)
         uvicorn.run(app, host=os.getenv("DEMO_HOST", "0.0.0.0"), port=DEMO_PORT)
     except KeyboardInterrupt:

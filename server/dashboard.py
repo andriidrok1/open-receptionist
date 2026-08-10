@@ -1,13 +1,14 @@
-"""Дашборд закладу (Фаза 3): FastAPI віддає сторінку + JSON зі статистикою.
+"""The owner's dashboard: FastAPI serves one page plus a JSON stats endpoint.
 
-Сторінка одна на всі галузі — підписи приходять із конфігу закладу разом із
-даними, тож готелю вона показує «Тип номера / Ночей / Гостей», а барбершопу
-«Послуга / Тривалість» без колонки гостей.
+There is a single page for every industry — the labels arrive from the business
+config together with the data, so a hotel sees "Room type / Nights / Guests"
+while a barbershop sees "Service / Duration" with no guests column at all.
 
-Запуск:
-    python dashboard.py                 # http://localhost:8000, готель
-    BUSINESS=clinic python dashboard.py # та сама сторінка для стоматології
-Дані рахуються з тих самих записів, що створює голосовий агент (crm.py).
+Running it:
+    python dashboard.py                 # http://localhost:8000
+    BUSINESS=clinic python dashboard.py # the same page for a dental practice
+
+The numbers are computed from the same records the voice agent creates (crm.py).
 """
 
 import os
@@ -18,7 +19,7 @@ from business import BUSINESS
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
-app = FastAPI(title=f"voice-receptionist · {BUSINESS.key}")
+app = FastAPI(title=f"open-receptionist · {BUSINESS.key}")
 STATIC = Path(__file__).parent / "static"
 
 BOOK = BUSINESS.booking
@@ -35,8 +36,10 @@ BUSINESS_INFO = {
         "action": BOOK.action.capitalize(),
         "unit": None if BOOK.is_slots else BOOK.unit.capitalize(),
         "party": BOOK.party_label.capitalize() if BOOK.ask_party else None,
-        # Без відмінювання міток із YAML: «Завантаження по тип номера» — саме
-        # той сорт дрібниці, який видає, що продукт зібрали з шаблону.
+        # Written out rather than composed from the YAML labels: "Occupancy by
+        # room type" declined incorrectly is exactly the kind of small wrongness
+        # that gives away a product assembled from a template.
+        # TODO(locale): these two belong in the language pack.
         "occupancy": "Завантаження на сьогодні" if BOOK.is_slots else "Завантаження зараз",
     },
 }

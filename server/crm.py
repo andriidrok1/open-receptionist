@@ -1,17 +1,25 @@
-"""crm.py — записи, броні й запити на дзвінок (SQLite). Галузе-незалежний шар.
+"""crm.py — bookings, appointments and callback requests (SQLite).
 
-Раніше це був PMS готелю. Виявилось, що готель, клініка й барбершоп — це та сама
-задача: РЕСУРС зайнятий на проміжку [starts_at, ends_at), і зайняти його можна
-не більше ніж capacity разів одночасно. Різниця тільки в тому, чим міряти
-проміжок:
+Industry-independent. This used to be a hotel PMS, until it turned out that a
+hotel, a dental practice and a barbershop are the same problem: a RESOURCE is
+occupied over the interval [starts_at, ends_at), and it can be occupied at most
+`capacity` times at once. The only difference is what measures the interval:
 
-    nights — межі задає гість (заїзд/виїзд), одиниця тарифікації — доба;
-    slots  — межі задає послуга (тривалість із конфігу), ціна фіксована.
+    nights — the customer sets the bounds (check-in/check-out), the billing unit
+             is a night;
+    slots  — the service sets the bounds (duration from the config), the price
+             is flat.
 
-Формат часу в базі: 'РРРР-ММ-ДД' для nights, 'РРРР-ММ-ДДTГГ:ХХ' для slots.
-Обидва порівнюються як рядки — звідси один SQL на перетин для обох моделей.
+Time format in the database: 'YYYY-MM-DD' for nights, 'YYYY-MM-DDTHH:MM' for
+slots. Both compare correctly as strings, which is why one SQL overlap query
+serves both models.
 
-Заклад береться з business.BUSINESS (один процес = один заклад = один телефон).
+The business comes from business.BUSINESS (one process = one business = one
+phone number).
+
+Note on language: strings returned to the caller as `error` are read out loud by
+the model, so they stay in the business's language until the locale layer lands.
+Everything only humans read is in English.
 """
 
 import json
@@ -27,24 +35,25 @@ from business import BUSINESS, slot_grid
 BIZ = BUSINESS
 BOOK = BUSINESS.booking
 
-# Кожен заклад — своя база: hotel.db, clinic.db, barbershop.db.
+# Every business gets its own database: hotel.db, clinic.db, barbershop.db.
 DB_PATH = Path(os.getenv("CRM_DB") or Path(__file__).parent / f"{BIZ.key}.db")
 
 _ISO_MIN = "%Y-%m-%dT%H:%M"
 
-#: Скільки хвилин у минуле ще вважаються «зараз» (див. _parse_slot).
+#: How many minutes into the past still count as "now" (see _parse_slot).
 GRACE_MIN = 10
-#: Верхня межа тривалості одного запису в одиницях (ночах).
+#: Upper bound on the length of a single booking, in units (nights).
 MAX_UNITS = 60
 
 
-# ------------------------------- телефон -------------------------------
+# ------------------------------- phone -------------------------------
 
 
 def normalize_phone(raw: str | None) -> str | None:
-    """Звести телефон до цифр (і провідного +): «067 123 45 67» → «0671234567».
-    Якщо цифр немає взагалі (LLM передав слова) — лишаємо як є, щоб проблема
-    була видима операторові, а не тихо загубилась."""
+    """Reduce a phone number to digits (and a leading +): "067 123 45 67" →
+    "0671234567". If there are no digits at all (the LLM passed words), leave it
+    as it is, so the problem stays visible to a human instead of vanishing.
+    """
     if not raw:
         return raw
     digits = re.sub(r"[^\d+]", "", raw)
@@ -52,15 +61,16 @@ def normalize_phone(raw: str | None) -> str | None:
 
 
 def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
-    """Перевірити український номер. Повертає (нормалізований, помилка).
+    """Validate a phone number. Returns (normalised, error).
 
-    Навіщо: модель, розпізнаючи телефон з мовлення, інколи додає або губить
-    цифру («нуль шістдесят сім сімсот сімдесят сім сорок п'ять шістдесят сім»
-    → 06777745667, одинадцять цифр). Мовчки прийняти такий номер = підтвердити
-    запис, за яким закладу не додзвоняться. Краще повернути помилку, щоб агент
-    перепитав.
+    Why: transcribing a number from speech, the model occasionally adds or drops
+    a digit and ends up with eleven. Silently accepting that means confirming a
+    booking the business can never call back on. Better to return an error so
+    the agent asks again.
 
-    Приймаємо: 0XXXXXXXXX (10 цифр), 380XXXXXXXXX / +380XXXXXXXXX (12 цифр).
+    Accepted today: 0XXXXXXXXX (10 digits), 380XXXXXXXXX / +380XXXXXXXXX.
+    TODO(locale): replace with `phonenumbers` and a country code from the config
+    — this hand-rolled version only knows one country's numbering plan.
     """
     if not raw:
         return None, "телефон не вказано"
@@ -80,8 +90,9 @@ def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
             "перепитай номер і повтори його вголос групами цифр"
         )
     if not digits.startswith("0"):
-        # Окрема гілка: інакше на номері з десятьма цифрами, але не з нуля,
-        # агент вимовляв уголос «у номері десять цифр замість десяти».
+        # A separate branch: otherwise a ten-digit number that does not start
+        # with zero made the agent say out loud "that number has ten digits
+        # instead of ten".
         return None, (
             "український номер починається з нуля — перепитай номер "
             "і повтори його вголос групами цифр"
@@ -89,7 +100,7 @@ def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
     return digits, None
 
 
-#: Слова, якими модель затикає обов'язкове поле імені, коли його не спитала.
+#: Words the model plugs into the mandatory name field when it never asked.
 _PLACEHOLDER_NAMES = {
     "гість", "гости", "гостя", "клієнт", "клиент", "пацієнт", "пациент",
     "guest", "client", "customer", "невідомо", "не вказано", "анонім", "n/a", "-",
@@ -97,12 +108,13 @@ _PLACEHOLDER_NAMES = {
 
 
 def validate_name(raw: str | None) -> tuple[str | None, str | None]:
-    """Перевірити ім'я. Повертає (ім'я, помилка).
+    """Validate a name. Returns (name, error).
 
-    Навіщо: якщо ім'я не прозвучало, модель охоче підставляє в обов'язкове поле
-    заглушку — «Гість». Формально запис створено, фактично готель отримує бронь
-    невідомо на кого. Просити модель у промпті «не вигадуй» недостатньо: це
-    ловиться детерміновано, тому ловиться тут.
+    Why: if the name never came up, the model happily fills the mandatory field
+    with a placeholder — "Guest". Formally a booking exists; in practice the
+    business has a reservation for nobody in particular. Asking the prompt not
+    to invent things is not enough: this is deterministically detectable, so it
+    is detected here.
     """
     name = (raw or "").strip()
     if not name:
@@ -118,24 +130,24 @@ def validate_name(raw: str | None) -> tuple[str | None, str | None]:
 
 
 def normalize_resource(raw: str) -> str | None:
-    """Усна назва послуги/типу номера → канонічний ключ конфігу."""
+    """A spoken service or room-type name → the canonical config key."""
     return BOOK.normalize_resource(raw)
 
 
-# --------------------------------- база ---------------------------------
+# --------------------------------- database ---------------------------------
 
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    # Запис іде під транзакцією (див. create_booking), тож паралельний дзвінок
-    # має дочекатись, а не впасти з «database is locked».
+    # Writes happen inside a transaction (see create_booking), so a concurrent
+    # call should wait rather than fail with "database is locked".
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
-_RENAMES = {  # стара готельна схема → універсальна
+_RENAMES = {  # the old hotel-only schema → the universal one
     "bookings": {
         "room_type": "resource",
         "check_in": "starts_at",
@@ -148,10 +160,10 @@ _RENAMES = {  # стара готельна схема → універсаль�
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Перейменувати готельні колонки в універсальні (ідемпотентно).
+    """Rename the hotel columns to the universal ones. Idempotent.
 
-    Потрібне тільки для баз, створених до пивоту на універсальний ресепшн —
-    у них лежать демо-брони, на яких показують дашборд.
+    Only needed for databases created before the pivot to a universal
+    receptionist — those hold the demo bookings the dashboard is shown with.
     """
     for table, renames in _RENAMES.items():
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -163,7 +175,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
-    """Створити таблиці (ідемпотентно) і підтягнути стару схему, якщо є."""
+    """Create the tables (idempotent) and migrate an older schema if present."""
     with _connect() as conn:
         conn.execute(
             """
@@ -182,8 +194,8 @@ def init_db() -> None:
             )
             """
         )
-        # Запити на зворотний дзвінок: усе, що поза записом і що агент чесно
-        # передає людині замість того, щоб вигадувати відповідь.
+        # Callback requests: everything outside booking that the agent honestly
+        # hands to a human instead of inventing an answer.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS messages (
@@ -195,8 +207,8 @@ def init_db() -> None:
             )
             """
         )
-        # Журнал дій агента: що він робив під час дзвінка. Потрібен демо-сторінці
-        # (стрічка «що зробила Оксана») і згодиться як основа журналу дзвінків.
+        # A log of what the agent did during a call. The demo page turns it into
+        # a live feed, and it is the natural basis for a real call log later.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS events (
@@ -208,7 +220,7 @@ def init_db() -> None:
             """
         )
         _migrate(conn)
-        # details з'явилась пізніше за схему — доливаємо в старі бази.
+        # `details` arrived after the schema did — add it to older databases.
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(bookings)")}
         if "details" not in cols:
             conn.execute("ALTER TABLE bookings ADD COLUMN details TEXT")
@@ -216,7 +228,7 @@ def init_db() -> None:
 
 
 def _occupied(conn: sqlite3.Connection, resource: str, starts_at: str, ends_at: str) -> int:
-    """Скільки одиниць ресурсу вже зайнято на цьому проміжку."""
+    """How many units of the resource are already taken over this interval."""
     row = conn.execute(
         """
         SELECT COUNT(*) AS cnt FROM bookings
@@ -228,11 +240,11 @@ def _occupied(conn: sqlite3.Connection, resource: str, starts_at: str, ends_at: 
     return row["cnt"]
 
 
-# ---------------------------- розбір часу ----------------------------
+# ---------------------------- parsing time ----------------------------
 
 
 def _parse_nights(start: str, end: str) -> tuple[str, str, int, str | None]:
-    """(starts_at, ends_at, кількість діб, помилка)."""
+    """(starts_at, ends_at, number of nights, error)."""
     try:
         ci = date.fromisoformat(start)
         co = date.fromisoformat(end)
@@ -240,8 +252,9 @@ def _parse_nights(start: str, end: str) -> tuple[str, str, int, str | None]:
         return "", "", 0, "неправильний формат дат, очікується РРРР-ММ-ДД"
     if (co - ci).days <= 0:
         return "", "", 0, "дата виїзду має бути пізніше за дату заїзду — перепитай дати"
-    # Без верхньої межі одна обмовка в даті виїзду перетворюється на бронь
-    # «чотириста ночей, чотириста вісімдесят тисяч» — і номер заблоковано на рік.
+    # Without an upper bound, one slip of the tongue in the check-out date turns
+    # into a booking of "four hundred nights, four hundred and eighty thousand"
+    # — and a room blocked for a year.
     if (co - ci).days > MAX_UNITS:
         return "", "", 0, (
             f"{(co - ci).days} {_plural((co - ci).days, BOOK.unit)} — це забагато "
@@ -258,7 +271,7 @@ def _parse_nights(start: str, end: str) -> tuple[str, str, int, str | None]:
 
 
 def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
-    """(starts_at, ends_at, помилка) для запису на конкретний час."""
+    """(starts_at, ends_at, error) for an appointment at a specific time."""
     raw = (start or "").strip().replace(" ", "T")
     try:
         begin = datetime.strptime(raw[:16], _ISO_MIN)
@@ -266,10 +279,11 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
         return "", "", "неправильний формат часу, очікується РРРР-ММ-ДДTГГ:ХХ"
     finish = begin + timedelta(minutes=duration_min)
 
-    # Хвилин десять назад — це не «минулий час», а «приїжджайте зараз»: поки
-    # людина домовляється, названа нею хвилина встигає стати минулою. Раніше
-    # аварійка на цьому втрачала по три-чотири ходи поспіль («цей час уже
-    # минув» на прохання приїхати негайно), і це в дзвінку, де вода тече.
+    # Ten minutes ago is not "in the past", it is "come right now": while the
+    # caller is negotiating, the minute they named quietly becomes the past. The
+    # emergency plumber config used to lose three or four turns in a row to
+    # "that time has already passed" in answer to a request to come immediately
+    # — on a call where water is running down a wall.
     if begin < BIZ.now() - timedelta(minutes=GRACE_MIN):
         return "", "", (
             f"цей час уже минув (зараз {BIZ.now().strftime('%Y-%m-%d %H:%M')}). "
@@ -297,12 +311,13 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
 def free_slots(
     resource_key: str, day: date, limit: int = 4, near: datetime | None = None
 ) -> list[str]:
-    """Вільні початки візитів на цей день — «ГГ:ХХ».
+    """Free appointment start times for this day, as "HH:MM".
 
-    Це те, чим агент рятує розмову, коли названий час зайнятий: назвати два-три
-    альтернативи набагато краще, ніж сказати «немає» і чекати нової пропозиції.
-    Тому за замовчуванням віддаємо найближчі до бажаного часу, а не перші за
-    розкладом: людині, яка просила на дванадцяту, дев'ята ранку не допоможе.
+    This is what rescues a conversation when the requested time is taken: naming
+    two or three alternatives is far better than saying "no" and waiting for the
+    caller to guess again. So by default we return the times closest to the one
+    they wanted, not the earliest on the schedule — someone who asked for noon
+    is not helped by nine in the morning.
     """
     res = BOOK.resource(resource_key)
     if not res:
@@ -327,15 +342,17 @@ def free_slots(
     return [t.strftime("%H:%M") for t in sorted(free[:limit])]
 
 
-# ------------------------------ наявність ------------------------------
+# ------------------------------ availability ------------------------------
 
+# TODO(locale): month names, unit forms and the phrasing in _spoken all move to
+# the language pack.
 _MONTHS_GEN = (
     "січня", "лютого", "березня", "квітня", "травня", "червня",
     "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
 )
 
-#: Форми одиниці тарифікації: 1 / 2-4 / 5+. Рядок для озвучення читається
-#: вголос, тому «3 ніч» тут не годиться.
+#: Forms of the billing unit: 1 / 2-4 / 5+. The spoken string is read out loud,
+#: so a mis-declined "3 night" will not do.
 _UNIT_FORMS = {
     "ніч": ("ніч", "ночі", "ночей"),
     "доба": ("доба", "доби", "діб"),
@@ -356,14 +373,15 @@ def _plural(n: int, unit: str) -> str:
 
 
 def _spoken(label: str, starts_at: str, ends_at: str, units: int, price: int) -> str:
-    """Готовий переказ запису — рівно те, що агент має вимовити вголос.
+    """A ready-made summary of the booking — exactly what the agent should say.
 
-    Навіщо: модель не зобов'язана рахувати. Коли інструмент віддавав розсип
-    полів, вона регулярно озвучувала своє: казала «виїзд двадцятого», а в базу
-    йшло двадцять перше; казала «дві ночі — дві тисячі чотириста» на бронь в
-    одну ніч за тисячу двісті. Гість чує одне, заклад бачить інше — і сварка
-    на стійці. Тепер усі числа зібрані в один рядок з бази, а моделі лишається
-    його переказати словами.
+    Why: the model is not obliged to do arithmetic. When the tool returned a
+    scattering of fields, it regularly voiced its own version: it said
+    "check-out on the twentieth" while the twenty-first went into the database,
+    and "two nights, two thousand four hundred" for a one-night booking at
+    twelve hundred. The caller hears one thing, the business sees another, and
+    they argue about it at the front desk. Now every number is assembled into
+    one string from the database and the model only has to say it in words.
     """
     def dm(iso: str) -> str:
         d = date.fromisoformat(iso[:10])
@@ -384,15 +402,16 @@ def check_availability(
     end: str | None = None,
     party_size: int = 1,
 ) -> dict:
-    """Чи вільно, скільки коштує. Єдиний вхід для обох моделей часу.
+    """Is it free, and what does it cost. One entry point for both time models.
 
-    nights: start = дата заїзду, end = дата виїзду (РРРР-ММ-ДД).
-    slots:  start = 'РРРР-ММ-ДДTГГ:ХХ', end рахується з тривалості послуги.
+    nights: start = check-in date, end = check-out date (YYYY-MM-DD).
+    slots:  start = 'YYYY-MM-DDTHH:MM', end is derived from the service length.
     """
-    # У помилкових відповідях НЕ можна віддавати "available": модель бачила
-    # `available: false` поруч з поясненням і казала гостю «вільних немає»,
-    # хоча місць було повно. Заміряно на аварійці: людина з протікаючою трубою
-    # почула «сантехніків немає», а вільних бригад було дві.
+    # Error responses must NOT carry "available": the model saw
+    # `available: false` next to the explanation and told the caller "there is
+    # nothing free", when in fact there was plenty. Measured on the emergency
+    # plumber config: someone with a burst pipe was told "we have no plumbers",
+    # while two crews were free.
     key = BOOK.normalize_resource(resource)
     if key is None:
         known = ", ".join(r.label for r in BOOK.resources)
@@ -430,8 +449,9 @@ def check_availability(
         wanted = datetime.strptime(starts_at, _ISO_MIN)
         out["duration_min"] = res.duration_min
         if left <= 0:
-            # Зайнято — одразу даємо чим замінити: спершу той самий день, потім
-            # наступний робочий. Без цього агент тупцює й перепитує наосліп.
+            # Taken — offer a replacement immediately: first the same day, then
+            # the next working one. Without this the agent stalls and asks the
+            # caller to guess again.
             day = wanted.date()
             out["alternatives"] = free_slots(key, day, near=wanted)
             out["alternatives_day"] = day.isoformat()
@@ -448,18 +468,18 @@ def check_availability(
     return out
 
 
-# ------------------------------- запис -------------------------------
+# ------------------------------- writing -------------------------------
 
 
 def _generate_ref_code(conn: sqlite3.Connection) -> str:
-    """Унікальний номер запису — ЧОТИРИ цифри.
+    """A unique booking reference — FOUR digits.
 
-    Було шість, і модель їх системно перевіювала: інструмент повертав БР-919873,
-    а вголос звучало «дев'ятсот дев'яносто одна тисяча вісімсот сімдесят три»
-    (991873) — гість записував номер, якого в базі немає. Чотиризначне число
-    gpt-4o-mini вимовляє правильно («сорок вісім, дванадцять»), а на демо-базі
-    й на реальному потоці закладу колізій не буде: унікальність усе одно
-    перевіряється тут же, а при вичерпанні лишається запасний шестизначний.
+    It used to be six, and the model mangled them systematically: the tool
+    returned 919873 and the agent said "nine hundred ninety-one thousand eight
+    hundred seventy-three" (991873), so the caller wrote down a reference that
+    does not exist. A four-digit number is read correctly, and collisions are a
+    non-issue at the volume of a single business: uniqueness is checked right
+    here, and a six-digit fallback remains if the space is ever exhausted.
     """
     for _ in range(30):
         code = BOOK.ref_prefix + str(uuid.uuid4().int % 9_000 + 1_000)
@@ -477,7 +497,7 @@ def create_booking(
     party_size: int = 1,
     details: dict | None = None,
 ) -> dict:
-    """Створити запис. Перед вставкою ще раз перевіряє наявність."""
+    """Create a booking. Availability is re-checked before the insert."""
     phone, phone_error = validate_phone(phone)
     if phone_error:
         return {"success": False, "error": phone_error}
@@ -485,8 +505,9 @@ def create_booking(
     if name_error:
         return {"success": False, "error": name_error}
 
-    # Обов'язкові поля галузі (адреса виїзду тощо) перевіряємо тут, а не
-    # покладаємось на промпт: запис без адреси для клінінгу — брак, а не дрібниця.
+    # Industry-mandatory fields (the address to visit, and so on) are checked
+    # here rather than left to the prompt: a cleaning job with no address is a
+    # defect, not a detail.
     details = {k: v for k, v in (details or {}).items() if v and str(v).strip()}
     missing = [f.label for f in BOOK.intake if f.required and not details.get(f.key)]
     if missing:
@@ -501,10 +522,11 @@ def create_booking(
             out["alternatives"] = avail["alternatives"]
         return out
 
-    # Перевірка наявності вище і вставка нижче — дві різні дії; між ними встигає
-    # влізти паралельний дзвінок. Заміряно: сім одночасних записів на ресурс із
-    # capacity=3 проходили всі сім. Тому остаточне рішення ухвалюємо всередині
-    # транзакції, яка тримає запис на час перевірки (BEGIN IMMEDIATE).
+    # The availability check above and the insert below are two separate
+    # actions, and a concurrent call fits neatly between them. Measured: seven
+    # simultaneous bookings against a resource with capacity=3 all succeeded. So
+    # the final decision is taken inside a transaction that holds the write lock
+    # for the duration of the check (BEGIN IMMEDIATE).
     with _connect() as conn:
         conn.isolation_level = None
         conn.execute("BEGIN IMMEDIATE")
@@ -557,7 +579,8 @@ def create_booking(
 
 
 def log_event(kind: str, detail: str | None = None) -> None:
-    """Записати дію агента. Тихо ковтає помилки: журнал не має ламати дзвінок."""
+    """Record something the agent did. Swallows errors on purpose: the log must
+    never be able to break a call."""
     try:
         with _connect() as conn:
             conn.execute(
@@ -580,7 +603,7 @@ def list_events(since: str = "") -> list[dict]:
 
 
 def take_message(customer_name: str, phone: str, topic: str) -> dict:
-    """Записати запит на зворотний дзвінок (питання поза межами запису)."""
+    """Record a callback request (a question outside the booking flow)."""
     phone, phone_error = validate_phone(phone)
     if phone_error:
         return {"success": False, "error": phone_error}
@@ -600,7 +623,7 @@ def take_message(customer_name: str, phone: str, topic: str) -> dict:
     return {"success": True, "note": "запит записано, з людиною зв'яжуться"}
 
 
-# ------------------------------ читання ------------------------------
+# ------------------------------ reading ------------------------------
 
 
 def _units_of(row: sqlite3.Row) -> int:
@@ -613,7 +636,7 @@ def _units_of(row: sqlite3.Row) -> int:
 
 
 def list_bookings() -> list[dict]:
-    """Усі записи, найновіші зверху (для дашборда)."""
+    """Every booking, newest first (for the dashboard)."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT * FROM bookings ORDER BY created_at DESC, rowid DESC"
@@ -641,7 +664,7 @@ def list_bookings() -> list[dict]:
 
 
 def list_messages() -> list[dict]:
-    """Усі запити на зворотний дзвінок, найновіші зверху."""
+    """Every callback request, newest first."""
     with _connect() as conn:
         rows = conn.execute(
             "SELECT * FROM messages ORDER BY created_at DESC, rowid DESC"
@@ -649,19 +672,21 @@ def list_messages() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-# ------------------------------ дашборд ------------------------------
+# ------------------------------ dashboard ------------------------------
 
 
 def _pct_delta(cur: float, prev: float) -> int | None:
-    """Відсоткова зміна період-до-періоду. None, якщо порівнювати нема з чим."""
+    """Period-over-period change in percent. None when there is nothing to
+    compare against."""
     if prev <= 0:
         return None
     return round((cur - prev) / prev * 100)
 
 
 def _load_status(left: int, total: int) -> str:
-    """good — є вільні; warning — мало вільних; critical — немає вільних;
-    closed — сьогодні заклад не працює (нуль місткості ≠ аншлаг)."""
+    """good — space available; warning — nearly full; critical — full;
+    closed — the business is not open today (zero capacity is not a full house).
+    """
     if total <= 0:
         return "closed"
     if left <= 0:
@@ -672,7 +697,7 @@ def _load_status(left: int, total: int) -> str:
 
 
 def _capacity_today(res) -> int:
-    """Скільки записів на цей ресурс фізично влазить у сьогоднішній день."""
+    """How many bookings for this resource physically fit into today."""
     if not BOOK.is_slots:
         return res.capacity
     hours = BOOK.hours_for(BIZ.today())
@@ -685,11 +710,12 @@ def _capacity_today(res) -> int:
 
 
 def stats(period_days: int = 30) -> dict:
-    """Агрегати для дашборда за поточний період + дельти до попереднього.
+    """Dashboard aggregates for the current period, plus deltas to the previous.
 
-    KPI — за датою СТВОРЕННЯ запису (робота агента). Завантаженість — поточний
-    стан: для nights це активні броні проти кількості номерів, для slots —
-    сьогоднішні записи проти місткості дня.
+    The KPIs are keyed on when a booking was CREATED — that is the agent's work.
+    Occupancy is the current state instead: for nights it is active bookings
+    against the number of rooms, for slots it is today's appointments against
+    the capacity of the day.
     """
     bookings = list_bookings()
     now = BIZ.now()
