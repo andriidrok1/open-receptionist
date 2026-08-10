@@ -42,8 +42,13 @@ WEIGHTS = [0.40, 0.32, 0.20, 0.08, 0.05, 0.03][: len(BOOK.resources)]
 
 
 def _phone() -> str:
-    op = random.choice(["67", "68", "50", "66", "63", "73", "97", "95"])
-    return f"+380 {op} {random.randint(100, 999)} {random.randint(10, 99)} {random.randint(10, 99)}"
+    """A plausible number in the store's canonical form.
+
+    Run through the same validation the agent's input goes through, so seeded
+    rows and real ones look identical on the dashboard.
+    """
+    raw = f"0{random.choice((50, 63, 66, 67, 68, 93, 95, 96, 97, 98, 99))}{random.randint(1000000, 9999999)}"
+    return crm.validate_phone(raw)[0] or raw
 
 
 def _slot_span(created: datetime) -> tuple[str, str, int] | None:

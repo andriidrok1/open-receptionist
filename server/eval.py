@@ -191,6 +191,10 @@ def run_dialog(client: OpenAI, tools: list, turns: list[str], auto_confirm: bool
 H_IN = date.today() + timedelta(days=35)
 H_OUT = H_IN + timedelta(days=3)
 H_PHONE = "0677774567"
+# The store keeps E.164 now, so the expectation goes through the same
+# normalisation the agent's input does — otherwise the test asserts on a format
+# rather than on the number.
+H_PHONE_STORED = crm.validate_phone(H_PHONE)[0]
 
 
 def _h_turns(room: str, phone_words: str = "сімсот сімдесят сім, сорок п'ять, шістдесят сім"):
@@ -212,7 +216,7 @@ def checks_t3(log) -> list[tuple[bool, str]]:
          f"дати {H_IN} → {H_OUT} (є {b['starts_at']} → {b['ends_at']})"),
         (b["party_size"] == 2, f"2 гостей (є {b['party_size']})"),
         (b["total_price"] == 5400, f"сума 5400 грн (є {b['total_price']})"),
-        (_digits(b["phone"]) == H_PHONE, f"телефон {H_PHONE} (є {_digits(b['phone'])})"),
+        (b["phone"] == H_PHONE_STORED, f"телефон {H_PHONE} (є {b['phone']})"),
     ]
     return out
 
@@ -254,8 +258,8 @@ def checks_t8(log) -> list[tuple[bool, str]]:
     if msgs:
         m = msgs[0]
         out += [
-            (_digits(m["phone"]) == "0671234567",
-             f"телефон 0671234567 (є {_digits(m['phone'])})"),
+            (m["phone"] == crm.validate_phone("0671234567")[0],
+             f"телефон 0671234567 (є {m['phone']})"),
             (any(w in m["topic"].lower() for w in ("собак", "спа", "тварин")),
              f"суть питання збережено (є: {m['topic']!r})"),
         ]
@@ -305,6 +309,7 @@ if (S_DAY - date.today()).days > BUSINESS.booking.horizon_days:
 S_HOUR = 10
 S_BUSY_HOUR = 12
 S_PHONE = "0677774567"
+S_PHONE_STORED = crm.validate_phone(S_PHONE)[0]
 #: The service C1 books — set in _slot_scenarios for each industry.
 BOOK_FIRST = None
 BUSY_STUB = "Зайнято Тестовий"  # ім'я броні-заглушки, якою забиваємо годину в C2
@@ -328,7 +333,7 @@ def checks_c1(log) -> list[tuple[bool, str]]:
         (b["starts_at"] == want, f"початок {want} (є {b['starts_at']})"),
         (b["total_price"] == BOOK_FIRST.price,
          f"ціна {BOOK_FIRST.price} (є {b['total_price']})"),
-        (_digits(b["phone"]) == S_PHONE, f"телефон {S_PHONE} (є {_digits(b['phone'])})"),
+        (b["phone"] == S_PHONE_STORED, f"телефон {S_PHONE} (є {b['phone']})"),
         (not _test_messages(), "зайвого запиту на дзвінок після запису немає"),
         *[
             (bool(b["details"].get(f.key)),

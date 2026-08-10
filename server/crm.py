@@ -27,6 +27,9 @@ import os
 import re
 import sqlite3
 import uuid
+
+import phonenumbers
+from phonenumbers import NumberParseException, PhoneNumberFormat, ValidationResult
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -72,37 +75,40 @@ def normalize_phone(raw: str | None) -> str | None:
 
 
 def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
-    """Validate a phone number. Returns (normalised, error).
+    """Validate a phone number. Returns (E.164, error).
 
-    Why: transcribing a number from speech, the model occasionally adds or drops
-    a digit and ends up with eleven. Silently accepting that means confirming a
-    booking the business can never call back on. Better to return an error so
+    Why validate at all: transcribing a number from speech, the model
+    occasionally adds or drops a digit. Silently accepting that means confirming
+    a booking the business can never call back on. Better to return an error so
     the agent asks again.
 
-    Accepted today: 0XXXXXXXXX (10 digits), 380XXXXXXXXX / +380XXXXXXXXX.
-    TODO(locale): replace with `phonenumbers` and a country code from the config
-    — this hand-rolled version only knows one country's numbering plan.
+    Why a library rather than our own rules: the hand-rolled version knew
+    exactly one numbering plan and rejected every American number on the first
+    try. `phonenumbers` is Google's libphonenumber, and the country comes from
+    the business config — so a new country is a config line, not a code change.
+
+    The stored form is E.164 (+380632096974). Unambiguous, and dialable from
+    anywhere, which matters the moment a business has customers abroad.
     """
     if not raw:
         return None, _err("phone.missing")
-
-    digits = re.sub(r"\D", "", raw)
-    if not digits:
+    if not re.search(r"\d", raw):
         return None, _err("phone.no_digits")
 
-    if len(digits) == 12 and digits.startswith("380"):
-        digits = "0" + digits[3:]
-    elif len(digits) == 11 and digits.startswith("80"):
-        digits = "0" + digits[2:]
+    try:
+        number = phonenumbers.parse(raw, BIZ.country)
+    except NumberParseException:
+        return None, _err("phone.invalid")
 
-    if len(digits) != 10:
-        return None, _err("phone.wrong_length", count=len(digits))
-    if not digits.startswith("0"):
-        # A separate branch: otherwise a ten-digit number that does not start
-        # with zero made the agent say out loud "that number has ten digits
-        # instead of ten".
-        return None, _err("phone.bad_prefix")
-    return digits, None
+    reason = phonenumbers.is_possible_number_with_reason(number)
+    if reason == ValidationResult.TOO_SHORT:
+        return None, _err("phone.too_short")
+    if reason == ValidationResult.TOO_LONG:
+        return None, _err("phone.too_long")
+    if not phonenumbers.is_valid_number(number):
+        return None, _err("phone.invalid")
+
+    return phonenumbers.format_number(number, PhoneNumberFormat.E164), None
 
 
 #: Words the model plugs into the mandatory name field when it never asked.
@@ -294,10 +300,10 @@ def _parse_slot(start: str, duration_min: int) -> tuple[str, str, str | None]:
     if BOOK.is_round_clock(begin.date()):
         return begin.strftime(_ISO_MIN), finish.strftime(_ISO_MIN), None
     if begin.time() < open_t:
-        return "", "", _err("slot.before_opening", opens=open_t.strftime("%H:%M"))
+        return "", "", _err("slot.before_opening", opens=L.time(open_t))
     if finish.time() > close_t or finish.date() != begin.date():
         return "", "", _err(
-            "slot.after_closing", duration=duration_min, closes=close_t.strftime("%H:%M")
+            "slot.after_closing", duration=duration_min, closes=L.time(close_t)
         )
     return begin.strftime(_ISO_MIN), finish.strftime(_ISO_MIN), None
 
@@ -333,7 +339,7 @@ def free_slots(
                 free.append(begin)
     if near:
         free.sort(key=lambda t: abs((t - near).total_seconds()))
-    return [t.strftime("%H:%M") for t in sorted(free[:limit])]
+    return [L.time(t) for t in sorted(free[:limit])]
 
 
 # ------------------------------ availability ------------------------------
@@ -381,7 +387,8 @@ def _spoken(label: str, starts_at: str, ends_at: str, units: int, price: int) ->
     money = L.text("spoken.money", price=price, currency=BIZ.currency)
     if BOOK.is_slots:
         return L.text(
-            "spoken.slot", label=label, date=dm(starts_at), time=starts_at[11:16], money=money
+            "spoken.slot", label=label, date=dm(starts_at), time=L.time(starts_at[11:16]),
+            money=money,
         )
     return L.text(
         "spoken.nights",

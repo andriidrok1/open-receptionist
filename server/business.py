@@ -210,6 +210,7 @@ class Business:
     demo_intro: str  # what the demo page says about this business
     demo_try: tuple[str, ...]  # the "try saying" suggestions
     language: str  # which language pack the agent speaks (locales/<lang>.yaml)
+    country: str  # ISO 3166-1 alpha-2, used to parse phone numbers
     tz: str  # the timezone of the BUSINESS, not of the server
     booking: BookingConfig
 
@@ -294,6 +295,11 @@ def _resources(raw: list[dict] | None) -> tuple[Resource, ...]:
     return tuple(out)
 
 
+def _country_default(language: str) -> str:
+    """The country a language pack assumes when a business does not say."""
+    return load_locale(language).text("settings.default_country")
+
+
 def load_business(key: str | None = None) -> Business:
     """Read a business YAML. key=None → BUSINESS_CONFIG / BUSINESS / 'hotel'."""
     path_env = _CLI_CONFIG or os.getenv("BUSINESS_CONFIG")
@@ -363,6 +369,10 @@ def load_business(key: str | None = None) -> Business:
         demo_intro=((d.get("demo") or {}).get("intro") or "").strip(),
         demo_try=tuple((d.get("demo") or {}).get("try") or ()),
         language=d.get("language") or DEFAULT_LANGUAGE,
+        # Falls back to the language pack's default: a Ukrainian-speaking
+        # business is almost certainly in Ukraine, and a config that forgets the
+        # field should still parse phone numbers correctly.
+        country=d.get("country") or _country_default(d.get("language") or DEFAULT_LANGUAGE),
         tz=d.get("tz") or "Europe/Kyiv",
         booking=booking,
     )

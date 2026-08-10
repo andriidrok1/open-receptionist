@@ -10,9 +10,10 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "pytest>=8.0",       # tests/ — deterministic checks, no network or API key
     "pyright>=1.1.404,<2",
     "ruff>=0.12.11,<1",
-    "playwright>=1.40",  # лише для скріншотів дашборда під час розробки
+    "playwright>=1.40",  # only for taking dashboard screenshots during development
 ]
 
 [tool.ruff]

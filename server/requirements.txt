@@ -18,6 +18,10 @@ pipecat-ai[openai,elevenlabs,silero,webrtc,websocket,runner]>=1.5.0
 fastapi>=0.115
 uvicorn[standard]>=0.30
 
+# Phone numbers. Google's libphonenumber: the country comes from the business
+# config, so supporting a new one is a config line rather than a code change.
+phonenumbers>=9.0
+
 # Business configs, keys, and the HTTP client shared across the pipeline.
 pyyaml>=6.0
 python-dotenv>=1.0
