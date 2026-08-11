@@ -6,7 +6,7 @@ what is knowingly broken, and what to work on next.
 **Keep it current.** When something here stops being true, fix the line in the
 same commit that made it untrue. A state file that lies is worse than none.
 
-Last updated: 2026-08-10 · branch `universal-receptionist`
+Last updated: 2026-08-11 · branch `universal-receptionist`
 
 ---
 
@@ -28,7 +28,7 @@ Strategy and milestones live in the Obsidian vault:
 
 ```bash
 cd server
-../.venv/bin/python -m pytest tests/ -q      # 110 tests, ~1s, no network, no keys
+../.venv/bin/python -m pytest tests/ -q      # 117 tests, ~1s, no network, no keys
 BUSINESS=clinic ../.venv/bin/python bot.py   # one bot          → :7860/client
 ../.venv/bin/python run_demo.py              # six bots + showcase → :8080
 BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
@@ -50,15 +50,16 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Voice pipeline (browser) | works | live calls ending in a booking |
 | Six businesses, two languages | works | showcase renders all six correctly |
 | Language layer | works | a third language was assembled and run with zero Python changes |
-| Booking, capacity, hours, horizon | works | 110 deterministic tests |
+| Booking, capacity, hours, horizon | works | 117 deterministic tests |
 | Cancel / reschedule / find by phone | works | tests + a live English call |
 | Call transcripts + cost/latency metrics | works | live calls; stored per call |
+| Semantic end-of-turn | works, effect unproven | classifier right on 16 cases; paired A/B inconclusive |
+| Alternatives on every schedule error | works | agent offers only what the tool returned |
 | Concurrency guard | works | 10 threads racing for 3 places; mutation-tested |
 | Phone numbers per country | works | UA and US, ~30 formats |
 | Owner dashboard | works, both languages | browser check, no Cyrillic on the English one |
 | eval / simulate | work in both languages | dental_us 4/4, Ukrainian unchanged |
 | Telephony | **UNVERIFIED** | code wired, never tested on a real number |
-| Semantic end-of-turn | works, effect UNPROVEN | classifier tested; paired A/B was inconclusive |
 
 ---
 
@@ -67,25 +68,49 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 1. **Telephony never tested on a real number.** Blocks publication: the README
    promises a phone. Needs a Twilio account — a human step, deliberately
    deferred.
-2. **Cost per minute unmeasured.** The headline claim of the whole pitch. Can be
-   measured now without telephony: a browser call spends the same STT/LLM/TTS,
-   and the phone leg is one extra line item later.
-3. **Audio recording.** Transcripts are stored now; audio is not. Legally a
+2. **Audio recording.** Transcripts are stored now; audio is not. Legally a
    separate act (several US states need both parties' consent), and pipecat's
    AudioBufferProcessor stayed silent in-pipeline — parked rather than solved.
-4. **No CI, no clean-machine install check.** The tests need neither network nor
+3. **No CI, no clean-machine install check.** The tests need neither network nor
    keys, so CI is an hour's work. The README's install instructions have never
    been followed on a machine that did not already have everything.
-5. **English voice is a placeholder.** Picked from the premade list, not by ear.
+4. **English voice is a placeholder.** Picked from the premade list, not by ear.
    The Ukrainian one went through `voice_lab.py` and a blind comparison.
-6. **Secrets and cost are global.** One `.env` for every business, so an agency
+5. **Secrets and cost are global.** One `.env` for every business, so an agency
    cannot separate clients' keys or bills.
-7. **`call_tool` is synchronous** inside an async pipeline. Microseconds with
+6. **`call_tool` is synchronous** inside an async pipeline. Microseconds with
    SQLite; the first HTTP integration will stall the audio. One hour to fix.
+7. **The agent can promise an hour it never checked.** Measured: 4 calls out of
+   5 when the time is outside opening hours. Nothing gets double-booked — the
+   store refuses — but a promise withdrawn a minute later sounds bad. Only fixed
+   properly by turn state deciding which tools exist.
+8. **The caller waits ~3s**, of which ~1.1s is our timer and ~1.8s is the model
+   writing. A speculative start (run the model at 0.4s of silence, cancel if
+   they resume) is the only way meaningfully below two seconds; pipecat has the
+   cancellation machinery but no ready-made version.
+9. **No idle handling.** If the caller goes quiet the bot waits forever. On a
+   phone line that is a dead end, and telephony is next.
 
 Deliberately **not** doing now: `Business` as an object instead of a module
 global (weeks, no user-visible change), dialogue state machine (a different
 product). Both are argued in the architecture document.
+
+---
+
+## Measured numbers
+
+Browser calls, Ukrainian cleaning config, 2026-08-11. Re-measure rather than
+trust these: rates change and so does the machine.
+
+| | |
+|---|---|
+| Caller waits | ~3.1s median (1.1s our turn timer, ~1.8s the model writing, 0.13s synthesis) |
+| Recognition | 0.64s, hidden under the turn timer since it runs in parallel |
+| Cost | ~$0.04/min, about 60% of it synthesis |
+| Whole-reply synthesis | costs nothing measurable: 3.13s against 3.43s per sentence |
+
+Every call now stores its own numbers, so this table can be rebuilt from real
+traffic rather than from probes.
 
 ---
 
@@ -165,6 +190,10 @@ server/
   crm.py            bookings, validation, availability (SQLite)
   agent_tools.py    tool schemas from the config; one execution path for all
   speech_text.py    pause markup, whole-reply aggregation
+  call_metrics.py   what a call costs, in seconds and in money
+  recording.py      the transcript of a call
+  turn_taking.py    deciding whether the caller finished or just paused
+  pricing.yaml      provider rates, with the date they were checked
   demo.py/run_demo  showcase: six bots on 7860+, page on 8080
   dashboard.py      owner panel
   eval.py           scripted dialogues (needs a key)
@@ -173,7 +202,7 @@ server/
   locales/          uk.yaml, en.yaml — the language
   businesses/       six configs — the business
   scenarios/        uk.yaml, en.yaml — test callers and eval data
-  tests/            110 deterministic tests
+  tests/            117 deterministic tests
 docs/README.uk.md   the older, more detailed Ukrainian documentation
 ```
 
