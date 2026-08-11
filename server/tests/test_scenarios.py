@@ -22,7 +22,7 @@ BUSINESSES_DIR = SERVER / "businesses"
 ALL_SCENARIOS = sorted(p.stem for p in SCENARIOS_DIR.glob("*.yaml"))
 
 REQUIRED = ("facts", "caller_prompt", "greeting_hint", "end_marker", "personas",
-            "claim_words", "distinctive", "negations")
+            "claim_words", "distinctive", "negations", "availability_claims")
 REQUIRED_FACTS = ("name", "phone", "address")
 
 

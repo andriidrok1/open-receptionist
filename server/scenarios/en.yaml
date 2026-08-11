@@ -198,3 +198,9 @@ eval:
     c3_late: 'After closing time: nothing is booked'
     c3_far: 'Too far ahead: nothing is booked'
     c4: Off-topic ({offtopic}) → take_message, nothing invented
+
+# Words the agent uses to ASSERT something about availability. Said without
+# calling a tool this is not caution but invention: it knows neither that day's
+# schedule nor what is already booked.
+availability_claims: ["nothing free", "no availability", "fully booked",
+                      "no free slots", "we're full", "nothing available"]

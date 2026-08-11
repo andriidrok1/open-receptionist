@@ -472,6 +472,39 @@ def _spoken(label: str, starts_at: str, ends_at: str, units: int, price: int) ->
     )
 
 
+def _alternatives_for(resource_key: str, start: str) -> dict:
+    """Free times near what was asked for, in both machine and spoken form.
+
+    Only for slots: the nights model has no grid of times to offer, and
+    inventing one would be worse than saying nothing.
+    """
+    if not BOOK.is_slots:
+        return {}
+    raw = (start or "").strip().replace(" ", "T")
+    try:
+        wanted = datetime.strptime(raw[:16], _ISO_MIN)
+    except (ValueError, TypeError):
+        return {}  # the time could not be read at all — nothing to be near
+
+    day = wanted.date()
+    if day < BIZ.today():
+        day = BIZ.today()
+    times = free_slots(resource_key, day, near=wanted)
+    for ahead in range(1, 8):
+        if times:
+            break
+        nxt = day + timedelta(days=ahead)
+        times = free_slots(resource_key, nxt)
+        day = nxt if times else day
+    if not times:
+        return {}
+    return {
+        "alternatives": times,
+        "alternatives_day": day.isoformat(),
+        "alternatives_spoken": [L.time(t) for t in times],
+    }
+
+
 def check_availability(
     resource: str,
     start: str,
@@ -502,7 +535,12 @@ def check_availability(
         starts_at, ends_at, units, err = _parse_nights(start, end or "")
         price_per_unit = res.price
     if err:
-        return {"error": err}
+        # An error that says "offer an earlier time" while returning nothing to
+        # offer leaves the agent with a choice between silence and invention,
+        # and it invents: measured at four calls out of five, once claiming
+        # there was no availability without having checked anything. So every
+        # schedule error carries real free times with it.
+        return {"error": err, **_alternatives_for(key, start)}
 
     if BOOK.ask_party and party_size > BOOK.max_party:
         return {"error": _err("party_too_large", max=BOOK.max_party)}
@@ -526,19 +564,9 @@ def check_availability(
         wanted = datetime.strptime(starts_at, _ISO_MIN)
         out["duration_min"] = res.duration_min
         if left <= 0:
-            # Taken — offer a replacement immediately: first the same day, then
-            # the next working one. Without this the agent stalls and asks the
-            # caller to guess again.
-            day = wanted.date()
-            out["alternatives"] = free_slots(key, day, near=wanted)
-            out["alternatives_day"] = day.isoformat()
-            for ahead in range(1, 8):
-                if out["alternatives"]:
-                    break
-                nxt = day + timedelta(days=ahead)
-                out["alternatives"] = free_slots(key, nxt)
-                out["alternatives_day"] = nxt.isoformat()
-            out["alternatives_spoken"] = [L.time(t) for t in out["alternatives"]]
+            # Taken — offer a replacement immediately, the same way an error
+            # does. Without this the agent stalls and asks the caller to guess.
+            out.update(_alternatives_for(key, start))
     else:
         out["units"] = units
         out["unit_label"] = BOOK.unit

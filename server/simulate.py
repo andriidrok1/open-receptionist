@@ -335,6 +335,34 @@ def check_booking_was_checked_at_all(run) -> list[str]:
     return []
 
 
+def check_no_availability_claim_without_checking(run) -> list[str]:
+    """The agent must not state that something is unavailable without asking.
+
+    Measured on a narrow probe: told a time outside opening hours, the model
+    answered on its own four times out of five, and once said "there is nothing
+    free" — a claim it had no basis for. A caller who believes that hangs up,
+    and the business never learns the call happened.
+
+    Stating the opening hours is fine, those are in its knowledge. Stating what
+    is booked is not: only the store knows that.
+    """
+    claims = tuple(w.lower() for w in SCEN.get("availability_claims", []))
+    if not claims:
+        return []
+    checked = False
+    bad = []
+    for who, text in run["transcript"]:
+        if who != "agent":
+            continue
+        if not checked and any(c in text.lower() for c in claims):
+            bad.append(f"claimed nothing is free without calling a tool: {text[:60]!r}")
+        # A tool call between two agent lines is recorded as its own line.
+        checked = checked or any(
+            n == "check_availability" for n, _, _ in run["tools"]
+        )
+    return bad
+
+
 def check_no_message_after_booking(run) -> list[str]:
     booked = False
     bad = []
@@ -392,6 +420,7 @@ CHECKS = [
     check_no_fabricated_data,
     check_booked_over_refusal,
     check_booking_was_checked_at_all,
+    check_no_availability_claim_without_checking,
     check_no_message_after_booking,
     check_no_loop,
     check_no_success_claim_on_error,

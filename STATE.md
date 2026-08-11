@@ -131,6 +131,17 @@ it" cannot be told from "the agent copied it from an example". Enforced by
 **Model runs vary.** A full English eval gave 3/4 once and 4/4 on the re-run,
 same code. One green run is not proof.
 
+**The browser probe's speech file has a fixed date in it** ("11 серпня"), so on
+that day of the month it asks for a time in the past and measures something else
+entirely. It read as an agent bug for a while. Regenerate the WAV, or read the
+transcript before believing what a live probe seems to show.
+
+**A prompt rule loses to the model's own confidence.** Told a time outside
+opening hours, the model answered on its own 4 times out of 5 rather than
+calling the tool, and strengthening the tool description changed nothing —
+still 4 of 5. What did work was giving it something true to say: errors now
+carry real free times, and when it does call the tool it offers exactly those.
+
 **Latency measurements need pairing and bucketing.** Two mistakes made in one
 sitting: comparing runs an hour apart caught the machine drifting rather than
 the change (the same code gave 3.1s and 5.7s), and averaging turns that call a

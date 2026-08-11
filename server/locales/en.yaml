@@ -104,7 +104,8 @@ prompt:
     availability. Say out loud exactly what the error says — a date in the past,
     a closing time, a number with the wrong digits — and ask for what you need.
     Never invent free times: you may only offer what came back in the
-    "alternatives" field.
+    "alternatives" field. If an error carries none, name no hour at all — just
+    ask when would suit them.
 
     You know nothing beyond the ABOUT THE BUSINESS block and what the tools
     return. Don't invent facts, prices or availability — it is better to say
@@ -244,7 +245,10 @@ tools:
   topic_arg: What the question is about, in a sentence or two
   check_availability: >-
     Check whether it's free and what it costs. Call this before quoting a price
-    to the {customer_dat} or confirming an {action}.
+    to the {customer_dat} or confirming an {action}. Call it ALWAYS, even when
+    you believe the time is outside opening hours or already past: it returns
+    both the reason and the real free times. Without it you know neither that
+    day's schedule nor what is already booked.
   check_availability_slots_suffix: " If the requested time is taken, it returns free alternatives."
   create_booking: >-
     Create the {action} in the business's system. Call this ONLY after you have
