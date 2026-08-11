@@ -246,6 +246,22 @@ def init_db() -> None:
             )
             """
         )
+        # What was actually said. The event log answers "which tools ran"; this
+        # answers "what did it say to them", which is the question an owner
+        # actually asks.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS calls (
+                id         TEXT PRIMARY KEY,
+                business   TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                lines      TEXT NOT NULL,
+                metrics    TEXT,
+                audio_path TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         _migrate(conn)
         # `details` arrived after the schema did — add it to older databases.
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(bookings)")}
@@ -774,6 +790,50 @@ def reschedule_booking(
         "ends_at": avail["ends_at"],
         "total_price": avail["total_price"],
     }
+
+
+def save_call(summary: dict) -> None:
+    """Store one call's transcript. Swallows errors on purpose — the same rule
+    as the event log: recording a call must never be able to break one."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO calls (id, business, started_at, lines, metrics, audio_path)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    summary["call_id"],
+                    summary.get("business", BIZ.key),
+                    summary.get("started_at", ""),
+                    json.dumps(summary.get("lines", []), ensure_ascii=False),
+                    json.dumps(summary.get("metrics", {}), ensure_ascii=False, default=str),
+                    summary.get("audio"),
+                ),
+            )
+            conn.commit()
+    except sqlite3.Error as e:
+        from loguru import logger
+
+        logger.error(f"could not store the call transcript: {e}")
+
+
+def list_calls(limit: int = 20) -> list[dict]:
+    """Recent calls, newest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM calls ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [
+        {
+            "call_id": r["id"],
+            "business": r["business"],
+            "started_at": r["started_at"],
+            "created_at": _to_business_time(r["created_at"]),
+            "lines": json.loads(r["lines"]),
+            "metrics": json.loads(r["metrics"]) if r["metrics"] else {},
+            "audio": r["audio_path"],
+        }
+        for r in rows
+    ]
 
 
 def log_event(kind: str, detail: str | None = None) -> None:

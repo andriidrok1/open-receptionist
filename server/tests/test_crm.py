@@ -352,3 +352,49 @@ def test_rescheduling_a_cancelled_booking_is_refused():
     crm.cancel_booking(made["ref_code"])
     out = crm.reschedule_booking(made["ref_code"], iso(52), iso(53))
     assert not out["success"] and out["error"]
+
+
+# ---------------------------- call transcripts ----------------------------
+
+
+def test_a_call_is_stored_and_read_back():
+    """The owner's first question is what the agent said to them."""
+    import sys as _sys
+
+    _sys.path.insert(0, str(SERVER))
+    from recording import CallRecorder
+
+    rec = CallRecorder(business_key=BUSINESS.key, started_at="2026-08-11 09:00:00")
+    rec.add("agent", "Добрий день!")
+    rec.add("caller", "Хочу записатися.")
+    rec.add_tool("check_availability", {"available": True})
+    rec.add("agent", "Завтра о десятій вільно.")
+    rec.finish(crm.save_call, {"duration_s": 40.0, "replies": 2})
+
+    stored = [c for c in crm.list_calls() if c["call_id"] == rec.call_id]
+    assert stored, "the call was not stored"
+    call = stored[0]
+    assert [x["who"] for x in call["lines"]] == ["agent", "caller", "tool", "agent"]
+    assert call["metrics"]["duration_s"] == 40.0
+
+
+def test_empty_lines_are_not_recorded():
+    from recording import CallRecorder
+
+    rec = CallRecorder(business_key=BUSINESS.key, started_at="x")
+    rec.add("agent", "  ")
+    rec.add("caller", "")
+    assert rec.lines == []
+
+
+def test_storing_a_call_never_raises():
+    """Losing a transcript is bad; breaking the end of a call over it is worse."""
+    from recording import CallRecorder
+
+    rec = CallRecorder(business_key=BUSINESS.key, started_at="x")
+    rec.add("agent", "hello")
+
+    def explode(_summary):
+        raise RuntimeError("store is down")
+
+    rec.finish(explode, {})  # must not propagate

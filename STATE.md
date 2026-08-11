@@ -52,6 +52,7 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Language layer | works | a third language was assembled and run with zero Python changes |
 | Booking, capacity, hours, horizon | works | 110 deterministic tests |
 | Cancel / reschedule / find by phone | works | tests + a live English call |
+| Call transcripts + cost/latency metrics | works | live calls; stored per call |
 | Concurrency guard | works | 10 threads racing for 3 places; mutation-tested |
 | Phone numbers per country | works | UA and US, ~30 formats |
 | Owner dashboard | works, both languages | browser check, no Cyrillic on the English one |
@@ -69,8 +70,9 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 2. **Cost per minute unmeasured.** The headline claim of the whole pitch. Can be
    measured now without telephony: a browser call spends the same STT/LLM/TTS,
    and the phone leg is one extra line item later.
-3. **Conversations are not stored.** Only which tools were called. The owner's
-   first question is "what did it say to them?" and there is no answer.
+3. **Audio recording.** Transcripts are stored now; audio is not. Legally a
+   separate act (several US states need both parties' consent), and pipecat's
+   AudioBufferProcessor stayed silent in-pipeline — parked rather than solved.
 4. **No CI, no clean-machine install check.** The tests need neither network nor
    keys, so CI is an hour's work. The README's install instructions have never
    been followed on a machine that did not already have everything.

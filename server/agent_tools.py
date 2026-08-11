@@ -235,7 +235,7 @@ def _call_tool(name: str, args: dict) -> dict:
     return {"error": L.text("errors.tool_unknown", name=name)}
 
 
-def register(llm, logger=None) -> None:
+def register(llm, logger=None, recorder=None) -> None:
     """Bind the handlers to a pipecat LLM service (the live bot's path).
 
     Every call is written to the event log, which the demo page turns into a
@@ -255,6 +255,11 @@ def register(llm, logger=None) -> None:
             if logger:
                 logger.info(f"[tool] {name}({args}) -> {result}")
             crm.log_event(name, result.get("ref_code") or result.get("error"))
+            if recorder:
+                # Into the transcript too: "checked availability" between two
+                # lines is what explains a three-second pause to whoever reads
+                # the call back.
+                recorder.add_tool(name, result)
             await params.result_callback(result)
 
         return handler

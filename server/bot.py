@@ -39,6 +39,7 @@ import agent_tools
 import crm
 from business import BUSINESS, L, build_system_prompt, greeting_hint
 from call_metrics import CallMetrics, format_report
+from recording import CallRecorder, TranscriptCollector
 from turn_taking import SemanticSpeechTimeoutStrategy
 from dotenv import load_dotenv
 from loguru import logger
@@ -368,7 +369,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # agent_tools assembles the tool set and its handlers from the business
     # config: an information-only receptionist gets take_message alone, a hotel
     # also gets bookings.
-    agent_tools.register(llm, logger)
+    agent_tools.register(llm, logger, recorder)
     context = LLMContext(tools=agent_tools.tools_schema())
 
     # Turn strategies are set EXPLICITLY. The default TurnAnalyzer is a
@@ -414,10 +415,20 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         user_params=LLMUserAggregatorParams(user_turn_strategies=turn_strategies),
     )
 
+    # What was said, kept for the owner — the question they ask first about a
+    # machine answering their phone. Text only: audio recording is a different
+    # act legally (several US states need both parties' consent) and turned out
+    # to need more care with the buffer's lifecycle than it is worth today.
+    recorder = CallRecorder(
+        business_key=BUSINESS.key,
+        started_at=BUSINESS.now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
+
     def store_metrics(summary: dict) -> None:
-        """One row per call, so cost and latency can be looked at afterwards."""
+        """One row per call: the numbers and the conversation together."""
         logger.info("\n" + format_report(summary))
         crm.log_event("call_metrics", json.dumps(summary, ensure_ascii=False, default=str))
+        recorder.finish(crm.save_call, summary)
 
     call_metrics = CallMetrics(on_finish=store_metrics)
 
@@ -431,9 +442,16 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             *([vad_processor] if vad_processor is not None else []),
             MuteSTTWhileBotSpeaks(),
             stt,
+            # Before the aggregator: it consumes TranscriptionFrame and does not
+            # pass it on, so anything downstream never sees what the caller said.
+            TranscriptCollector(recorder, side="caller"),
             user_aggregator,
             llm,
             *([WholeReplyAggregator()] if whole_reply else []),
+            # Before the TTS, for the same reason on the other side: the TTS
+            # consumes AggregatedTextFrame. This sits after WholeReplyAggregator
+            # so it records one reply at a time rather than fragments.
+            TranscriptCollector(recorder, side="agent"),
             tts,
             transport.output(),
             assistant_aggregator,
@@ -482,9 +500,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     async def on_client_disconnected(transport, client):
         logger.info("Client disconnected")
         # Report before cancelling: when the browser tab simply goes away, the
-        # worker is torn down without an EndFrame ever reaching the tail of the
-        # pipeline, and the call's numbers were silently lost. Which is most
-        # calls — people close the tab, they do not press a button.
+        # worker is torn down without an EndFrame ever reaching the pipeline,
+        # and the call's numbers were silently lost. Which is most calls —
+        # people close the tab, they do not press a button.
         call_metrics.report_now()
         await worker.cancel()
 
