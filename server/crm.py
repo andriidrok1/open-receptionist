@@ -148,6 +148,42 @@ _PLACEHOLDER_NAMES = {w.lower() for w in L.raw("placeholder_names")}
 _PLACEHOLDER_PHONES = {re.sub(r"\D", "", p) for p in L.raw("placeholder_phones", ())}
 
 
+def _as_bool(v) -> bool | None:
+    """A tool argument as a boolean, or None when it is not one.
+
+    Live calls deliver real JSON booleans, but the value has been through a
+    model, and models sometimes send "false", "no" or "yes" as strings. An
+    unrecognised answer is None — no rule fires on a value nobody understood.
+    """
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "yes", "y", "1"):
+        return True
+    if s in ("false", "no", "n", "0"):
+        return False
+    return None
+
+
+def _refused_intake(details: dict) -> str | None:
+    """The first intake answer that rules this booking out, as a spoken error.
+
+    The counterpart of the service-area check, and here for the same reason:
+    the prompt states the rule in words so the agent can decline early and
+    politely, this makes declining unavoidable. "Someone 18 or older must be
+    at the property" survived in the prompt right up until a caller insisted —
+    a dispatch rule that depends on the model holding firm is a preference,
+    not a rule.
+    """
+    for f in BOOK.intake:
+        if f.refuse_if is None or f.key not in details:
+            continue
+        want, got = _as_bool(f.refuse_if), _as_bool(details[f.key])
+        if want is not None and got is not None and want == got:
+            return f.refusal or _err("intake_refused", label=f.label)
+    return None
+
+
 def _verify_addresses(details: dict) -> tuple[dict, str | None]:
     """Look up every intake field declared as an address; repair or refuse.
 
@@ -529,10 +565,27 @@ def _spoken(label: str, starts_at: str, ends_at: str, units: int, price: int) ->
         # calendar sitting in front of it. Nothing downstream can catch that —
         # the date is real and the slot is free — so the only fix is for the
         # weekday to arrive as a fact rather than be recalled.
+        weekday = _WEEKDAYS[date.fromisoformat(starts_at[:10]).weekday()]
+        if BOOK.arrival_window_min > 0:
+            # Trades quote a window, not a minute: the slot underneath stays
+            # exact for the capacity math, but what the caller hears is
+            # "between nine and ten". Computed here so the model never does
+            # the arithmetic — it would.
+            begin = datetime.strptime(starts_at, _ISO_MIN)
+            until = begin + timedelta(minutes=BOOK.arrival_window_min)
+            return L.text(
+                "spoken.slot_window",
+                label=label,
+                weekday=weekday,
+                date=dm(starts_at),
+                time=L.time(begin.strftime("%H:%M")),
+                time_end=L.time(until.strftime("%H:%M")),
+                money=money,
+            )
         return L.text(
             "spoken.slot",
             label=label,
-            weekday=_WEEKDAYS[date.fromisoformat(starts_at[:10]).weekday()],
+            weekday=weekday,
             date=dm(starts_at),
             time=L.time(starts_at[11:16]),
             money=money,
@@ -689,10 +742,20 @@ def create_booking(
     # Industry-mandatory fields (the address to visit, and so on) are checked
     # here rather than left to the prompt: a cleaning job with no address is a
     # defect, not a detail.
-    details = {k: v for k, v in (details or {}).items() if v and str(v).strip()}
-    missing = [f.label for f in BOOK.intake if f.required and not details.get(f.key)]
+    #
+    # `is not None` rather than truthiness: False is an ANSWER on a bool field
+    # — "no adult will be there" — and dropping it as empty would report the
+    # question as unasked instead of refusing the booking over the answer.
+    details = {
+        k: v for k, v in (details or {}).items() if v is not None and str(v).strip()
+    }
+    missing = [f.label for f in BOOK.intake if f.required and f.key not in details]
     if missing:
         return {"success": False, "error": _err("intake_missing", fields=", ".join(missing))}
+
+    refused = _refused_intake(details)
+    if refused:
+        return {"success": False, "error": refused}
 
     details, details_error = _verify_addresses(details)
     if details_error:

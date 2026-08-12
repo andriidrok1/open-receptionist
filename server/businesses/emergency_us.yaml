@@ -55,8 +55,8 @@ speech:
     Got it — water under the sink. I can get someone out at two today. Ninety-nine
     for the visit, and he'll price the repair once he's looked at it. Send him?
   recap: >-
-    So — plumber to <address>, <day> at <time>, for <name>
-    <break time="0.4s" /> ninety-nine for the visit. That right?
+    So — plumber to <address>, <day> between <window start> and <window end>,
+    for <name> <break time="0.4s" /> ninety-nine for the visit. That right?
 
 # Out-of-scope QUESTIONS only. Hazards are deliberately NOT here: the generic
 # escalation flow ends in "someone will call back", and "someone will call
@@ -121,8 +121,10 @@ knowledge: |
   PAYMENT: card or cash on completion. You never take a card number over the
   phone. If asked to, say the plumber handles payment on site.
 
-  ARRIVAL: the booked time is when we aim to be there; traffic can move it by
-  half an hour. Say so rather than promising to the minute. The plumber calls
+  ARRIVAL: we quote a one-hour arrival window, never a minute — the tool's
+  "spoken" line already words it as "between nine and ten", read it from
+  there. If pushed for an exact time, say plainly that traffic makes the
+  minute a promise we can't keep, and the window is what we do keep. The plumber calls
   or texts when he is on his way — that is the arrival notice; there is no
   live tracking and you do not know which technician is assigned or their
   name. Do not invent policies beyond this: no answer is better than a made-up
@@ -162,6 +164,11 @@ booking:
   # Hourly, because the arrival time is approximate anyway. Booking to the
   # half hour would imply a precision the trade does not have.
   slot_step_min: 60
+  # What the caller HEARS: "between nine and ten", never "at nine". The slot
+  # underneath stays exact for the capacity math; research on the trades is
+  # unanimous that windows are what gets quoted, because traffic makes the
+  # minute a fiction and a missed minute is a one-star review.
+  arrival_window_min: 60
   horizon_days: 7
   # Round the clock: an emergency does not consult the opening hours.
   hours:
@@ -198,6 +205,15 @@ booking:
       label: adult on site
       description: Whether someone 18 or older will be at the property when the plumber arrives
       required: true
+      # Typed and enforced in code: the prompt held this rule right up until a
+      # caller insisted their fifteen-year-old was responsible. A dispatch rule
+      # that depends on the model holding firm is a preference, not a rule.
+      type: bool
+      refuse_if: false
+      refusal: >-
+        someone eighteen or older has to be at the property when the plumber
+        arrives — a firm rule, don't book this; offer a time when an adult can
+        be there instead
     - key: access
       label: how to get in
       description: Gate code, floor, parking, dogs, where the shut-off is

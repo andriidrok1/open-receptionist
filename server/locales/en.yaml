@@ -61,6 +61,11 @@ spoken:
   # rather than from the model's memory of what day it is. Saying "Thursday"
   # over a Tuesday is the one date error nothing downstream can catch.
   slot: "{label}, {weekday} {date} at {time}, {money}"
+  # For businesses that quote an arrival window (booking.arrival_window_min):
+  # the slot underneath is exact, the words are not — "between nine and ten"
+  # is what a trade can honestly promise, and both ends are computed in code
+  # so the model never adds minutes itself.
+  slot_window: "{label}, {weekday} {date}, arriving between {time} and {time_end}, {money}"
   nights: "{label}, check in {start}, check out {end}, {units} {unit} — {money}"
 
 placeholder_names: [guest, client, customer, patient, caller, unknown,
@@ -383,6 +388,11 @@ errors:
   resource_unknown: "unknown option {resource}; we have: {known}"
   party_too_large: the maximum is {max} per booking
   intake_missing: "missing details: {fields}"
+  # An intake answer that rules the visit out (config: refuse_if). A business
+  # usually writes its own `refusal` wording; this is the fallback.
+  intake_refused: >-
+    the answer about {label} rules this visit out — explain why kindly and
+    offer what you can, but do not book it
   # Said out loud, so it repeats the address back: the caller cannot correct a
   # street name they never heard the agent get wrong.
   address:

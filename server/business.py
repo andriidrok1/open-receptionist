@@ -108,6 +108,17 @@ class IntakeField:
     #: Currently only "address", which looks the answer up in a gazetteer —
     #: see address.py for why a spoken street name cannot be trusted as heard.
     validate: str = ""
+    #: "string" (the default) or "bool". A bool reaches the model as a typed
+    #: true/false tool argument instead of free text — "my kid is fifteen but
+    #: very responsible" cannot be compared against a rule, true/false can.
+    type: str = "string"
+    #: A booking whose answer equals this is REFUSED in code. The prompt says
+    #: the same rule in words so the agent declines early and politely; this
+    #: makes declining unavoidable. None means no rule.
+    refuse_if: object = None
+    #: What the refusal error says. Empty falls back to a generic line from
+    #: the language pack.
+    refusal: str = ""
 
 
 @dataclass(frozen=True)
@@ -134,6 +145,12 @@ class BookingConfig:
     max_party: int = 10
     ref_prefix: str = "БР-"
     slot_step_min: int = 30
+    #: Minutes of arrival uncertainty QUOTED to the caller. Zero means exact
+    #: times (a dental chair is booked to the minute). Trades quote windows —
+    #: "between nine and ten" — because traffic makes the minute a fiction; the
+    #: slot underneath stays exact for the capacity math, only the words
+    #: change. See crm._spoken.
+    arrival_window_min: int = 0
     horizon_days: int = 365
     hours: dict[str, str | None] = field(default_factory=dict)
     resources: tuple[Resource, ...] = ()
@@ -396,6 +413,7 @@ def load_business(key: str | None = None) -> Business:
         max_party=int(b.get("max_party", 10)),
         ref_prefix=b.get("ref_prefix", dflt["ref_prefix"]),
         slot_step_min=int(b.get("slot_step_min", 30)),
+        arrival_window_min=int(b.get("arrival_window_min", 0) or 0),
         horizon_days=int(b.get("horizon_days", 365)),
         hours={k: b.get("hours", {}).get(k) for k in WEEKDAYS} if b.get("hours") else {},
         resources=_resources(b.get("resources")),
@@ -406,6 +424,9 @@ def load_business(key: str | None = None) -> Business:
                 description=f.get("description", ""),
                 required=bool(f.get("required", True)),
                 validate=(f.get("validate") or "").strip().lower(),
+                type=(f.get("type") or "string").strip().lower(),
+                refuse_if=f.get("refuse_if", None),
+                refusal=(f.get("refusal") or "").strip(),
             )
             for f in (b.get("intake") or [])
         ),

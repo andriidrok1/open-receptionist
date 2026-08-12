@@ -85,7 +85,10 @@ def _intake_props() -> dict:
     """
     return {
         f.key: {
-            "type": "string",
+            # A bool field is typed as one: "will an adult be there" answered
+            # as free text ("my kid is fifteen but responsible") cannot be
+            # compared against a rule; true/false can.
+            "type": "boolean" if f.type == "bool" else "string",
             "description": f.description or f.label.capitalize(),
         }
         for f in BOOK.intake
