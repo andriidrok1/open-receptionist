@@ -519,6 +519,31 @@ dashboard:
   total: Total
   view_all: View all
   months_short: [Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec]
+  # The inbox — the owner's to-do feed — and the call log.
+  inbox: Inbox
+  calls: Calls
+  new_items: New
+  all_items: All
+  mark_handled: Done
+  handled_done: Handled
+  item_booking: New booking
+  item_cancellation: Cancelled
+  item_message: Call back
+  inbox_empty: Nothing here yet — bookings and messages will appear as calls come in.
+  all_handled: All caught up.
+  view_call: View call
+  calls_empty: No calls yet.
+  outcome_booked: booked
+  outcome_message: message
+  outcome_none: no outcome
+  replies_label: replies
+  close: Close
+  # The sign-in page.
+  login_title: Owner sign-in
+  password: Password
+  sign_in: Sign in
+  wrong_password: That password didn't match. Try again.
+  sign_out: Sign out
 
 # Invented names for demo data (seed_demo.py). An English panel full of
 # Ukrainian surnames reads as an unfinished product.

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,8 +17,11 @@
     --hair: #edeef2;
     --track: #eef0f4;
     --good: #22b563;
+    --good-soft: #e8f7ee;
     --warn: #f0993a;
+    --warn-soft: #fff1e3;
     --crit: #ef5350;
+    --crit-soft: #fdeaea;
     --good-ink: #16a34a;
     --radius: 16px;
     --shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
@@ -27,9 +30,10 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body { background: var(--bg); color: var(--ink); font-size: 14px; }
+  a { color: inherit; }
   .app { display: flex; min-height: 100vh; }
 
-  /* ---------- Sidebar ---------- */
+  /* ---------- Sidebar (desktop) ---------- */
   .sidebar {
     width: 248px; flex: none; background: var(--surface);
     border-right: 1px solid var(--hair); display: flex; flex-direction: column;
@@ -45,17 +49,22 @@
   .brand-city { color: var(--muted); font-size: 12px; margin-top: 3px; }
 
   .nav { margin-top: 18px; display: flex; flex-direction: column; gap: 2px; flex: 1; }
-  .nav a {
+  .nav button {
     display: flex; align-items: center; gap: 12px; padding: 11px 14px;
-    border-radius: 11px; color: var(--ink-2); text-decoration: none; font-weight: 500;
+    border-radius: 11px; color: var(--ink-2); font-weight: 500; font-size: 14px;
+    background: none; border: 0; cursor: pointer; text-align: left; width: 100%;
+    font-family: inherit;
   }
-  .nav a svg { width: 20px; height: 20px; stroke: currentColor; }
-  .nav a:hover { background: #f7f7fa; color: var(--ink); }
-  .nav a.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+  .nav button svg { width: 20px; height: 20px; stroke: currentColor; flex: none; }
+  .nav button:hover { background: #f7f7fa; color: var(--ink); }
+  .nav button.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+  .nav .count {
+    margin-left: auto; background: var(--crit); color: #fff; border-radius: 999px;
+    font-size: 11px; font-weight: 700; min-width: 20px; height: 20px;
+    display: grid; place-items: center; padding: 0 6px;
+  }
 
-  .agent-card {
-    border: 1px solid var(--hair); border-radius: 14px; padding: 14px; margin-top: 16px;
-  }
+  .agent-card { border: 1px solid var(--hair); border-radius: 14px; padding: 14px; margin-top: 16px; }
   .agent-row { display: flex; align-items: center; gap: 11px; }
   .agent-mic {
     width: 40px; height: 40px; border-radius: 50%; background: var(--primary);
@@ -66,15 +75,40 @@
   .agent-name { font-weight: 700; font-size: 15px; line-height: 1.2; }
   .agent-state { font-size: 12px; color: var(--good-ink); display: flex; align-items: center; gap: 5px; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
-  .agent-btn {
-    margin-top: 12px; width: 100%; padding: 9px; border: 1px solid var(--primary);
-    color: var(--primary); background: transparent; border-radius: 10px;
-    font-weight: 600; font-size: 13px; cursor: pointer;
+  .signout {
+    margin-top: 10px; text-align: center; display: block; color: var(--muted);
+    font-size: 12px; text-decoration: none; padding: 6px;
   }
-  .agent-btn:hover { background: var(--primary-soft); }
+  .signout:hover { color: var(--ink); }
+
+  /* ---------- Bottom nav (mobile) ---------- */
+  .tabbar { display: none; }
+  @media (max-width: 720px) {
+    .sidebar { display: none; }
+    .tabbar {
+      display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+      background: var(--surface); border-top: 1px solid var(--hair);
+      padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    }
+    .tabbar button {
+      flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+      background: none; border: 0; color: var(--ink-2); font-size: 11px; font-weight: 600;
+      padding: 6px 0; cursor: pointer; position: relative; font-family: inherit;
+    }
+    .tabbar button.active { color: var(--primary); }
+    .tabbar button svg { width: 22px; height: 22px; stroke: currentColor; }
+    .tabbar .count {
+      position: absolute; top: 0; left: calc(50% + 6px);
+      background: var(--crit); color: #fff; border-radius: 999px;
+      font-size: 10px; font-weight: 700; min-width: 17px; height: 17px;
+      display: grid; place-items: center; padding: 0 5px;
+    }
+    .main { padding-bottom: 84px !important; }
+  }
 
   /* ---------- Main ---------- */
   .main { flex: 1; padding: 26px 30px; min-width: 0; }
+  @media (max-width: 720px) { .main { padding: 18px 14px; } }
   .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
   .h1 { font-size: 26px; font-weight: 800; margin: 0; letter-spacing: -.01em; }
   .sub { color: var(--ink-2); margin-top: 4px; }
@@ -86,10 +120,111 @@
   }
   .pill svg { width: 16px; height: 16px; stroke: var(--muted); }
   .pill .strong { color: var(--ink); font-weight: 600; }
-  .pill .tiny { font-size: 11px; color: var(--muted); }
-  .pill-agent { line-height: 1.25; }
+  @media (max-width: 720px) { .pills { display: none; } }
 
-  /* KPI */
+  /* ---------- Inbox ---------- */
+  .chips { display: flex; gap: 8px; margin: 18px 0 14px; }
+  .chip {
+    border: 1px solid var(--hair); background: var(--surface); color: var(--ink-2);
+    border-radius: 999px; padding: 7px 16px; font-weight: 600; font-size: 13px;
+    cursor: pointer; font-family: inherit;
+  }
+  .chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .feed { display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
+  .item {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 16px; display: flex; gap: 14px;
+    transition: opacity .2s;
+  }
+  .item.done { opacity: .55; }
+  .item-ic {
+    width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center;
+    flex: none;
+  }
+  .item-ic svg { width: 21px; height: 21px; }
+  .item-body { flex: 1; min-width: 0; }
+  .item-top { display: flex; align-items: baseline; gap: 8px; }
+  .item-kind { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .item-when { color: var(--muted); font-size: 12px; margin-left: auto; flex: none; }
+  .item-name { font-weight: 700; font-size: 16px; margin-top: 4px; }
+  .item-line { color: var(--ink-2); margin-top: 3px; line-height: 1.45; overflow-wrap: anywhere; }
+  .item-line b { color: var(--ink); font-weight: 600; }
+  .item-price { font-weight: 700; color: var(--ink); }
+  .tel {
+    display: inline-flex; align-items: center; gap: 7px; margin-top: 9px;
+    background: var(--primary-soft); color: var(--primary); font-weight: 700;
+    border-radius: 10px; padding: 8px 13px; text-decoration: none; font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tel svg { width: 15px; height: 15px; stroke: currentColor; }
+  .item-foot { display: flex; align-items: center; gap: 14px; margin-top: 11px; }
+  .viewcall {
+    background: none; border: 0; color: var(--ink-2); font-size: 12.5px; font-weight: 600;
+    cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 5px;
+    font-family: inherit;
+  }
+  .viewcall:hover { color: var(--primary); }
+  .viewcall svg { width: 14px; height: 14px; stroke: currentColor; }
+  .check {
+    margin-left: auto; border: 1.5px solid var(--hair); background: var(--surface);
+    color: var(--ink-2); border-radius: 10px; padding: 8px 14px; font-weight: 600;
+    font-size: 12.5px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
+    transition: all .15s; flex: none; font-family: inherit;
+  }
+  .check svg { width: 15px; height: 15px; stroke: currentColor; }
+  .check:hover { border-color: var(--good); color: var(--good-ink); }
+  .check.on { background: var(--good-soft); border-color: transparent; color: var(--good-ink); }
+  .empty {
+    text-align: center; color: var(--muted); padding: 56px 20px; max-width: 760px;
+    background: var(--surface); border: 1px dashed var(--hair); border-radius: var(--radius);
+  }
+  .empty svg { width: 34px; height: 34px; stroke: var(--muted); margin-bottom: 10px; }
+
+  /* ---------- Calls ---------- */
+  .calls { display: flex; flex-direction: column; gap: 10px; max-width: 760px; margin-top: 18px; }
+  .callrow {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 14px 16px; display: flex; align-items: center;
+    gap: 14px; cursor: pointer; width: 100%; text-align: left; font-family: inherit; font-size: 14px;
+  }
+  .callrow:hover { border-color: #d8d5f5; }
+  .call-ic {
+    width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+    background: var(--primary-soft); color: var(--primary); flex: none;
+  }
+  .call-ic svg { width: 18px; height: 18px; stroke: currentColor; }
+  .call-when { font-weight: 600; }
+  .call-meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; margin-left: auto; flex: none; }
+  .b-good { background: var(--good-soft); color: var(--good-ink); }
+  .b-warn { background: var(--warn-soft); color: #b56a15; }
+  .b-mute { background: var(--track); color: var(--ink-2); }
+  .b-crit { background: var(--crit-soft); color: var(--crit); }
+
+  /* ---------- Transcript drawer ---------- */
+  .scrim { position: fixed; inset: 0; background: rgba(20,22,32,.4); z-index: 40; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 100vw); z-index: 41;
+    background: var(--bg); display: flex; flex-direction: column;
+    box-shadow: -12px 0 40px rgba(16,24,40,.18); animation: slidein .18s ease;
+  }
+  @keyframes slidein { from { transform: translateX(30px); opacity: 0; } }
+  .drawer-h {
+    background: var(--surface); border-bottom: 1px solid var(--hair);
+    padding: 16px 18px; display: flex; align-items: center; gap: 12px;
+  }
+  .drawer-h .x {
+    margin-left: auto; border: 0; background: var(--track); border-radius: 10px;
+    width: 34px; height: 34px; cursor: pointer; color: var(--ink-2); font-size: 16px;
+    font-family: inherit;
+  }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .bubble { max-width: 82%; padding: 10px 14px; border-radius: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+  .bub-agent { background: var(--surface); border: 1px solid var(--hair); align-self: flex-start; border-bottom-left-radius: 5px; }
+  .bub-caller { background: var(--primary-soft); align-self: flex-end; border-bottom-right-radius: 5px; }
+  .bub-tool { align-self: center; color: var(--muted); font-size: 11.5px; font-style: italic; padding: 0 8px; text-align: center; }
+
+  /* ---------- Overview (KPIs, charts, table) ---------- */
   .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 22px; }
   .kpi {
     background: var(--surface); border: 1px solid var(--hair); border-radius: var(--radius);
@@ -103,13 +238,11 @@
   .kpi-delta .up { color: var(--good-ink); font-weight: 700; }
   .kpi-delta .down { color: var(--crit); font-weight: 700; }
 
-  /* panels */
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
   .card { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px; }
   .card-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
   .card-title { font-size: 16px; font-weight: 700; }
 
-  /* occupancy */
   .occ-head, .occ-row { display: grid; grid-template-columns: 108px 1fr 74px 52px; align-items: center; gap: 14px; }
   .occ-head { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
   .occ-row { padding: 9px 0; }
@@ -118,11 +251,10 @@
   .occ-fill { height: 100%; border-radius: 6px; }
   .occ-count { color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
   .occ-pct { font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
-  .legend { display: flex; gap: 22px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hair); color: var(--ink-2); font-size: 13px; }
+  .legend { display: flex; gap: 22px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hair); color: var(--ink-2); font-size: 13px; flex-wrap: wrap; }
   .legend span { display: flex; align-items: center; gap: 7px; }
   .legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
 
-  /* revenue chart */
   .chart { display: flex; gap: 12px; }
   .yaxis { display: flex; flex-direction: column; justify-content: space-between; height: 260px; padding-bottom: 26px; color: var(--muted); font-size: 12px; text-align: right; width: 56px; }
   .plotwrap { flex: 1; min-width: 0; }
@@ -136,7 +268,6 @@
   .xaxis { display: flex; justify-content: space-around; margin-top: 8px; color: var(--ink-2); font-size: 13px; }
   .xaxis span { width: 22%; text-align: center; }
 
-  /* bookings table */
   .tablewrap { margin-top: 4px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
   thead th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 10px 14px; white-space: nowrap; }
@@ -146,346 +277,22 @@
   .num { font-variant-numeric: tabular-nums; }
   .dates { color: var(--ink-2); }
   .arrow { color: var(--muted); margin: 0 4px; }
-  .badge { display: inline-block; padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-  .btn-ghost { border: 1px solid var(--hair); background: var(--surface); color: var(--primary); font-weight: 600; padding: 9px 15px; border-radius: 10px; cursor: pointer; font-size: 13px; }
-  .btn-ghost:hover { background: var(--primary-soft); }
+  .rbadge { display: inline-block; padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; }
   .tfoot { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; color: var(--muted); font-size: 13px; }
-  .pager { display: flex; gap: 6px; }
-  .pager button { width: 32px; height: 32px; border: 1px solid var(--hair); background: var(--surface); border-radius: 9px; cursor: pointer; color: var(--ink-2); }
-  .pager .cur { background: var(--primary-soft); color: var(--primary); border-color: transparent; font-weight: 700; }
 
   @media (max-width: 1050px) { .kpis { grid-template-columns: repeat(2,1fr); } .grid2 { grid-template-columns: 1fr; } }
-  @media (max-width: 720px) { .sidebar { display: none; } }
+  @media (max-width: 720px) { .kpis { grid-template-columns: 1fr 1fr; gap: 10px; } .kpi { padding: 14px; } .kpi-val { font-size: 22px; } }
 </style>
 </head>
 <body>
-<div class="app">
-  <!-- SIDEBAR -->
-  <aside class="sidebar">
-    <div class="brand">
-      <div class="crest">
-        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 17h16l-1.2-7-4 3-2.8-5-2.8 5-4-3z"/><path d="M4 20h16"/>
-        </svg>
-      </div>
-      <div class="brand-name" id="brandName">RIVIERA HOTEL</div>
-      <div class="brand-city" id="brandCity"></div>
-    </div>
-    <nav class="nav">
-      <a class="active" href="#">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-        <span id="navOverview"></span>
-      </a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg> <span id="navAction">Записи</span></a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M3 21V7l9-4 9 4v14"/><path d="M9 21v-6h6v6"/></svg> <span id="navResource">Послуги</span></a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/></svg> <span id="navCustomer">Клієнти</span></a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/></svg> <span id="navCalls"></span></a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> <span id="navFinance"></span></a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z"/></svg> <span id="navSettings"></span></a>
-    </nav>
-    <div class="agent-card">
-      <div class="agent-row">
-        <div class="agent-mic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg></div>
-        <div>
-          <div class="agent-role" id="agentRole"></div>
-          <div class="agent-name" id="agentName"></div>
-          <div class="agent-state"><span class="dot"></span><span id="agentState"></span></div>
-        </div>
-      </div>
-      <button class="agent-btn" id="agentSettings"></button>
-    </div>
-  </aside>
-
-  <!-- MAIN -->
-  <main class="main">
-    <div class="topbar">
-      <div>
-        <h1 class="h1" id="pageTitle"></h1>
-        <div class="sub" id="subTitle"></div>
-      </div>
-      <div class="pills">
-        <div class="pill pill-agent"><span class="dot"></span><div><div class="strong" id="pillAgent"></div><div class="tiny" id="pillAgentSub"></div></div></div>
-        <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg><span id="pillRange" class="strong">—</span></div>
-        <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg><span><span id="updatedLabel"></span>: <span id="pillUpd" class="strong">щойно</span></span></div>
-      </div>
-    </div>
-
-    <section class="kpis" id="kpis"></section>
-
-    <section class="grid2">
-      <div class="card">
-        <div class="card-h"><div class="card-title" id="occTitle"></div></div>
-        <div class="occ-head"><div id="occCol"></div><div></div><div style="text-align:right" id="occBusy"></div><div style="text-align:right" id="occTotal"></div></div>
-        <div id="occ"></div>
-        <div class="legend">
-          <span><i style="background:var(--good)"></i><span id="legFree"></span></span>
-          <span><i style="background:var(--warn)"></i><span id="legFew"></span></span>
-          <span><i style="background:var(--crit)"></i><span id="legNone"></span></span>
-          <span><i style="background:var(--muted)"></i><span id="legClosed"></span></span>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-h"><div class="card-title" id="revTitle"></div></div>
-        <div class="chart">
-          <div class="yaxis" id="yaxis"></div>
-          <div class="plotwrap">
-            <div class="plot"><div id="grid"></div><div class="bars" id="bars"></div></div>
-            <div class="xaxis" id="xaxis"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="card" style="margin-top:18px">
-      <div class="card-h"><div class="card-title" id="tableTitle"></div><button class="btn-ghost" id="tableBtn"></button></div>
-      <div class="tablewrap">
-        <table>
-          <thead><tr id="thead"></tr></thead>
-          <tbody id="rows"></tbody>
-        </table>
-      </div>
-      <div class="tfoot"><div id="tcount">—</div><div class="pager"><button>‹</button><button class="cur">1</button><button>›</button></div></div>
-    </section>
-
-    <section class="card" style="margin-top:18px" id="msgCard" hidden>
-      <div class="card-h">
-        <div class="card-title"><span id="msgTitle"></span> <span class="badge" id="msgCount" style="background:var(--primary-soft);color:var(--primary);margin-left:6px"></span></div>
-      </div>
-      <div class="tablewrap">
-        <table>
-          <thead><tr><th id="msgWho"></th><th id="msgPhone"></th><th id="msgQuestion"></th><th id="msgReceived"></th></tr></thead>
-          <tbody id="msgRows"></tbody>
-        </table>
-      </div>
-    </section>
-  </main>
-</div>
-
-<script type="module">
-const nf = new Intl.NumberFormat("uk-UA");
-const el = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
-
-const STATUS = { good: "var(--good)", warning: "var(--warn)", critical: "var(--crit)", closed: "var(--muted)" };
-// Кольори бейджів роздаються по порядку ресурсів у конфігу — щоб нова галузь
-// не вимагала правити фронт.
-const PALETTE = [
-  ["#eef1ff", "#5566d8"], ["#e7f0fe", "#2f79d6"], ["#fff1e3", "#e08636"],
-  ["#fde9e9", "#dc4b4b"], ["#e8f7ee", "#2f9e5e"], ["#f3ecfd", "#7b5bd6"],
-];
-let MONTHS = ["01","02","03","04","05","06","07","08","09","10","11","12"];  // replaced from the language pack
-const pad = (n) => String(n).padStart(2, "0");
-const fmtDate = (iso) => { const d = new Date(iso); return `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()}`; };
-const fmtTime = (iso) => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-const fmtRange = (a,b) => { const d1=new Date(a), d2=new Date(b); return `${d1.getDate()} ${MONTHS[d1.getMonth()]} – ${d2.getDate()} ${MONTHS[d2.getMonth()]} ${d2.getFullYear()}`; };
-const fmtCreated = (s) => { const d = new Date(s.replace(" ","T")); return `${fmtDate(d)}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-
-let BIZ = { currency: "", is_slots: false, labels: {} };
-let UI = {};   // labels from the business language pack (see dashboard.py)
-let RESOURCE_COLOR = {};
-
-function kpiMeta() {
-  const cur = BIZ.currency;
-  const meta = [
-    { key: "total_bookings", label: `${BIZ.labels.action || UI.records} ${UI.total_suffix}`, color: "#6c8cf5",
-      icon: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>' },
-    { key: "total_revenue", label: `${UI.revenue} (${cur})`, color: "#22b07d",
-      icon: '<rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M2 10h20"/><circle cx="17" cy="14" r="1.4"/>' },
-  ];
-  // «Гостей прийнято» має сенс лише там, де питають кількість людей.
-  if (BIZ.labels.party) meta.push(
-    { key: "total_people", label: `${BIZ.labels.party} ${UI.total_suffix}`, color: "#f0913a",
-      icon: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 6a3 3 0 0 1 0 6M18 20c0-2-1-3.5-2.5-4.3"/>' });
-  meta.push(
-    { key: "avg_check", label: `${UI.avg_check} (${cur})`, color: "#7c6cf0",
-      icon: '<rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 9h20"/><path d="M6 15h4"/>' });
-  return meta;
-}
-
-function renderKPIs(kpi, deltas) {
-  const box = document.getElementById("kpis"); box.innerHTML = "";
-  for (const m of kpiMeta()) {
-    const d = deltas[m.key];
-    let delta = `<span style="color:var(--muted)">${UI.no_previous}</span>`;
-    if (d !== null && d !== undefined) {
-      const cls = d >= 0 ? "up" : "down";
-      const sign = d >= 0 ? "+" : "";
-      delta = `<span class="${cls}">${sign}${d}%</span> ${UI.vs_previous}`;
-    }
-    box.appendChild(el(`
-      <div class="kpi">
-        <div class="kpi-ic" style="background:${m.color}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${m.icon}</svg>
-        </div>
-        <div>
-          <div class="kpi-label">${m.label}</div>
-          <div class="kpi-val">${nf.format(kpi[m.key])}</div>
-          <div class="kpi-delta">${delta}</div>
-        </div>
-      </div>`));
-  }
-}
-
-function renderOccupancy(rows) {
-  const box = document.getElementById("occ"); box.innerHTML = "";
-  for (const t of rows) {
-    box.appendChild(el(`
-      <div class="occ-row">
-        <div class="occ-name">${t.label}</div>
-        <div class="occ-track"><div class="occ-fill" style="width:${Math.min(t.occupancy_pct,100)}%;background:${STATUS[t.status]}"></div></div>
-        <div class="occ-count">${t.booked} / ${t.capacity}</div>
-        <div class="occ-pct" style="color:${STATUS[t.status]}">${t.occupancy_pct}%</div>
-      </div>`));
-  }
-}
-
-function renderChart(rows) {
-  const max = Math.max(1, ...rows.map(t => t.revenue));
-  const unit = max > 200000 ? 50000 : max > 20000 ? 5000 : 500;
-  const step = Math.max(unit, Math.ceil(max / 4 / unit) * unit);
-  const niceMax = step * 4;
-  const yaxis = document.getElementById("yaxis"); yaxis.innerHTML = "";
-  const grid = document.getElementById("grid"); grid.innerHTML = "";
-  for (let i = 4; i >= 0; i--) {
-    const val = step * i;
-    yaxis.appendChild(el(`<div>${val === 0 ? "0" : (val >= 1000 ? (val/1000)+" "+UI.thousands : val)}</div>`));
-    grid.appendChild(el(`<div class="gridline" style="top:${(1 - i/4)*100}%"></div>`));
-  }
-  const bars = document.getElementById("bars"); bars.innerHTML = "";
-  const xaxis = document.getElementById("xaxis"); xaxis.innerHTML = "";
-  for (const t of rows) {
-    const h = (t.revenue / niceMax) * 100;
-    bars.appendChild(el(`
-      <div class="barcol" title="${t.label}: ${nf.format(t.revenue)} ${BIZ.currency}">
-        <div class="barval">${nf.format(t.revenue)}</div>
-        <div class="bar" style="height:${h}%"></div>
-      </div>`));
-    xaxis.appendChild(el(`<span>${t.label}</span>`));
-  }
-}
-
-function tableColumns() {
-  const L = BIZ.labels;
-  const cols = [`№`, L.customer || UI.customer, UI.phone, L.resource || UI.occupancy];
-  cols.push(BIZ.is_slots ? UI.datetime_col : `${UI.dates_col} <span class="arrow">→</span>`);
-  cols.push(BIZ.is_slots ? UI.duration : L.unit || UI.units);
-  if (L.party) cols.push(L.party);
-  cols.push(`${UI.amount} (${BIZ.currency})`, UI.created);
-  return cols;
-}
-
-function renderTable(bookings) {
-  document.getElementById("thead").innerHTML =
-    tableColumns().map(c => `<th>${c}</th>`).join("");
-  const rows = document.getElementById("rows"); rows.innerHTML = "";
-  for (const b of bookings.slice(0, 5)) {
-    const [bg, fg] = RESOURCE_COLOR[b.resource] || ["#eee", "#555"];
-    const when = BIZ.is_slots
-      ? `${fmtDate(b.starts_at)}, ${fmtTime(b.starts_at)}`
-      : `${fmtDate(b.starts_at)}<span class="arrow">→</span>${fmtDate(b.ends_at)}`;
-    const amount = BIZ.is_slots
-      ? `${Math.round((new Date(b.ends_at) - new Date(b.starts_at)) / 60000)} ${UI.minutes_short}`
-      : b.units;
-    const party = BIZ.labels.party ? `<td class="num">${b.party_size}</td>` : "";
-    rows.appendChild(el(`
-      <tr>
-        <td class="ref">${b.ref_code}</td>
-        <td>${b.customer_name}</td>
-        <td class="num">${b.phone}</td>
-        <td><span class="badge" style="background:${bg};color:${fg}">${b.resource_label}</span></td>
-        <td class="dates num">${when}</td>
-        <td class="num">${amount}</td>
-        ${party}
-        <td class="num" style="font-weight:600">${nf.format(b.total_price)}</td>
-        <td class="dates num">${fmtCreated(b.created_at)}</td>
-      </tr>`));
-  }
-  document.getElementById("tcount").textContent =
-    `${UI.showing} ${Math.min(bookings.length, 5)} ${UI.of} ${bookings.length}`;
-}
-
-function renderMessages(messages) {
-  const card = document.getElementById("msgCard");
-  const list = messages || [];
-  card.hidden = list.length === 0;
-  document.getElementById("msgCount").textContent = list.length;
-  const rows = document.getElementById("msgRows"); rows.innerHTML = "";
-  for (const m of list.slice(0, 8)) {
-    rows.appendChild(el(`
-      <tr>
-        <td style="font-weight:600">${m.customer_name}</td>
-        <td class="num">${m.phone}</td>
-        <td style="white-space:normal;max-width:420px">${m.topic}</td>
-        <td class="dates num">${fmtCreated(m.created_at)}</td>
-      </tr>`));
-  }
-}
-
-function applyBusiness(biz) {
-  BIZ = biz;
-  const L = biz.labels || {};
-  UI = biz.ui || {};
-  if (UI.months_short) MONTHS = UI.months_short;
-
-  // Кожен підпис приходить із пакета мови закладу. Раніше вони були зашиті
-  // тут українською — англомовний заклад отримував англійського агента на
-  // телефоні й українську панель для власника.
-  const put = (id, text) => { const n = document.getElementById(id); if (n) n.textContent = text; };
-
-  put("brandName", (biz.brand || "").toUpperCase());
-  put("brandCity", biz.city || "");
-  put("agentName", biz.agent);
-  put("pillAgent", `${biz.agent} · ${(UI.agent_online || "").toLowerCase()}`);
-  put("pillAgentSub", `${UI.agent_role} ${UI.agent_active}`);
-  put("navCalls", UI.nav_calls);
-  put("navFinance", UI.nav_finance);
-  put("navSettings", UI.nav_settings);
-  put("occTotal", UI.total);
-  put("tableBtn", UI.view_all);
-  put("navOverview", UI.overview);
-  put("navAction", L.action || UI.records);
-  put("navResource", L.resource || UI.occupancy);
-  put("navCustomer", L.customer || UI.customer);
-  put("agentRole", UI.agent_role);
-  put("agentState", UI.agent_online);
-  put("agentSettings", UI.agent_settings);
-  put("pageTitle", UI.title);
-  put("updatedLabel", UI.updated);
-  put("occTitle", UI.occupancy);
-  put("occCol", L.resource || UI.occupancy);
-  put("occBusy", UI.occ_busy);
-  put("legFree", UI.free);
-  put("legFew", UI.few);
-  put("legNone", UI.none_left);
-  put("legClosed", UI.closed_today);
-  put("revTitle", `${UI.revenue} (${biz.currency})`);
-  put("tableTitle", L.action || UI.records);
-  put("msgTitle", UI.callbacks);
-  put("msgWho", L.customer || UI.customer);
-  put("msgPhone", UI.phone);
-  put("msgQuestion", UI.question);
-  put("msgReceived", UI.received);
-  put("subTitle", `${UI.subtitle} · ${biz.brand}`);
-  document.title = `${biz.brand} · ${(UI.agent_role || "").toLowerCase()}`;
-}
-
-
-async function load() {
-  const r = await fetch("/api/stats");
-  const s = await r.json();
-  if (s.business) applyBusiness(s.business);
-  s.by_resource.forEach((t, i) => { RESOURCE_COLOR[t.resource] = PALETTE[i % PALETTE.length]; });
-  document.getElementById("pillRange").textContent = fmtRange(s.period_start, s.period_end);
-  document.getElementById("pillUpd").textContent = UI.just_now;
-  renderKPIs(s.kpi, s.deltas);
-  renderOccupancy(s.by_resource);
-  renderChart(s.by_resource);
-  renderTable(s.bookings);
-  renderMessages(s.messages);
-}
-
-load();
-setInterval(load, 15000);
-</script>
+<div id="root"></div>
+<!-- Vendored, not a CDN: the page must work with no internet beyond the
+     server itself, and must not phone third parties from a page full of
+     customers' numbers. React 18 UMD + htm as the JSX-less template layer —
+     real components and hooks, no build step for the installer. -->
+<script src="/static/vendor/react.production.min.js"></script>
+<script src="/static/vendor/react-dom.production.min.js"></script>
+<script src="/static/vendor/htm.umd.js"></script>
+<script src="/static/dashboard.js"></script>
 </body>
 </html>

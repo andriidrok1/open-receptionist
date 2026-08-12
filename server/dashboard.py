@@ -1,28 +1,98 @@
-"""The owner's dashboard: FastAPI serves one page plus a JSON stats endpoint.
+"""The owner's dashboard: an inbox first, a stats page second.
 
-There is a single page for every industry — the labels arrive from the business
-config together with the data, so a hotel sees "Room type / Nights / Guests"
-while a barbershop sees "Service / Duration" with no guests column at all.
+The page answers the question an owner actually opens it with — "what happened
+while I wasn't looking, and whom do I owe a call?" — so the first screen is a
+feed of bookings, cancellations and callback requests, each with a checkmark
+the owner flips. The charts that used to be the whole dashboard live on the
+Overview tab.
 
 Running it:
     python dashboard.py                 # http://localhost:8000
     BUSINESS=clinic python dashboard.py # the same page for a dental practice
 
+Access: set DASHBOARD_PASSWORD in .env and the page asks for it once per
+browser (a signed cookie keeps the session for 30 days). With no password set
+the dashboard answers only to localhost — a real install is reachable from the
+internet, and an open inbox full of customers' phone numbers is a leak, not a
+convenience.
+
 The numbers are computed from the same records the voice agent creates (crm.py).
 """
 
+import asyncio
+import hashlib
+import hmac
 import os
+import time
 from pathlib import Path
 
 import crm
 from business import BUSINESS
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 app = FastAPI(title=f"open-receptionist · {BUSINESS.key}")
 STATIC = Path(__file__).parent / "static"
+# The React runtime and the dashboard app itself. Vendored, not a CDN: a
+# self-hosted install must not depend on unpkg being reachable — or on the
+# customer data page phoning anyone at all.
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 BOOK = BUSINESS.booking
+
+# ------------------------------- access -------------------------------
+
+PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
+COOKIE = "owner_session"
+SESSION_DAYS = 30
+
+
+def _sign(expires: int) -> str:
+    """HMAC over the expiry, keyed off the password itself.
+
+    No session table and nothing random to store: a token is valid exactly
+    while the password it was minted under stays the same, so changing the
+    password in .env revokes every cookie out there — which is the behaviour
+    an installer expects from rotating a credential.
+    """
+    key = hashlib.sha256(f"open-receptionist dashboard:{PASSWORD}".encode()).digest()
+    return hmac.new(key, str(expires).encode(), hashlib.sha256).hexdigest()
+
+
+def _make_token() -> str:
+    expires = int(time.time()) + SESSION_DAYS * 86400
+    return f"{expires}.{_sign(expires)}"
+
+
+def _token_ok(token: str) -> bool:
+    expires, _, sig = (token or "").partition(".")
+    if not expires.isdigit() or not sig:
+        return False
+    return int(expires) > time.time() and hmac.compare_digest(sig, _sign(int(expires)))
+
+
+def _is_owner(request: Request) -> bool:
+    if PASSWORD:
+        return _token_ok(request.cookies.get(COOKIE, ""))
+    # No password configured: this is a developer's own machine. Answering
+    # non-local requests anyway would turn every forgotten .env into a public
+    # list of customers' phone numbers.
+    host = request.client.host if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def _require_owner(request: Request) -> None:
+    if not _is_owner(request):
+        raise HTTPException(status_code=401)
+
+
+def _dash_ui() -> dict:
+    return BUSINESS.pack.raw("dashboard")
+
+
+# ------------------------------- business card -------------------------------
 
 BUSINESS_INFO = {
     "brand": os.getenv("BRAND", BUSINESS.brand),
@@ -30,6 +100,15 @@ BUSINESS_INFO = {
     "agent": os.getenv("AGENT_NAME", BUSINESS.agent_name),
     "currency": BUSINESS.currency,
     "is_slots": BOOK.is_slots,
+    # The trades promise "between nine and ten", so the inbox shows the same
+    # window the caller heard, not a minute the crew will be judged against.
+    "arrival_window_min": BOOK.arrival_window_min,
+    # Intake answers are stored under config keys ("address", "problem");
+    # these are the human labels the cards print next to them.
+    "intake_labels": {f.key: f.label for f in BOOK.intake},
+    # Whether the page runs behind a password — the UI offers "sign out" only
+    # when there is a session to sign out of.
+    "auth": bool(PASSWORD),
     "labels": {
         "resource": BOOK.resource_label.capitalize(),
         "customer": BUSINESS.customer_nom.capitalize(),
@@ -44,19 +123,113 @@ BUSINESS_INFO = {
 }
 
 
+# ------------------------------- pages -------------------------------
+
+
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return (STATIC / "dashboard.html").read_text(encoding="utf-8")
+def index(request: Request) -> HTMLResponse:
+    if _is_owner(request):
+        return HTMLResponse((STATIC / "dashboard.html").read_text(encoding="utf-8"))
+    if not PASSWORD:
+        # Reached from another machine with no password set: tell the
+        # installer what to do instead of showing a login that cannot succeed.
+        return HTMLResponse(
+            "<h3>open-receptionist</h3>"
+            "<p>Set <code>DASHBOARD_PASSWORD</code> in <code>server/.env</code> "
+            "and restart to open this dashboard from other machines.</p>",
+            status_code=403,
+        )
+    ui = _dash_ui()
+    page = (STATIC / "login.html").read_text(encoding="utf-8")
+    for key in ("login_title", "password", "sign_in", "wrong_password"):
+        page = page.replace("{" + key + "}", ui.get(key, key))
+    page = page.replace("{brand}", BUSINESS_INFO["brand"])
+    return HTMLResponse(page)
+
+
+class LoginBody(BaseModel):
+    password: str = ""
+
+
+@app.post("/api/login")
+async def api_login(body: LoginBody) -> JSONResponse:
+    if not PASSWORD:
+        raise HTTPException(status_code=403)
+    if not hmac.compare_digest(body.password, PASSWORD):
+        # A beat of delay is the whole anti-bruteforce budget this needs:
+        # the password is one shared secret, not a user database.
+        await asyncio.sleep(0.5)
+        raise HTTPException(status_code=401)
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        COOKIE,
+        _make_token(),
+        max_age=SESSION_DAYS * 86400,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@app.get("/logout")
+def logout() -> RedirectResponse:
+    response = RedirectResponse("/", status_code=303)
+    response.delete_cookie(COOKIE)
+    return response
+
+
+# ------------------------------- data -------------------------------
 
 
 @app.get("/api/stats")
-def api_stats() -> JSONResponse:
+def api_stats(request: Request) -> JSONResponse:
+    _require_owner(request)
     data = crm.stats()
     data["business"] = BUSINESS_INFO
     return JSONResponse(data)
 
 
+@app.get("/api/inbox")
+def api_inbox(request: Request) -> JSONResponse:
+    _require_owner(request)
+    return JSONResponse({"items": crm.inbox(), "business": BUSINESS_INFO})
+
+
+@app.get("/api/calls")
+def api_calls(request: Request) -> JSONResponse:
+    _require_owner(request)
+    return JSONResponse({"calls": crm.call_log()})
+
+
+@app.get("/api/call/{call_id}")
+def api_call(request: Request, call_id: str) -> JSONResponse:
+    _require_owner(request)
+    call = crm.get_call(call_id)
+    if call is None:
+        raise HTTPException(status_code=404)
+    return JSONResponse(call)
+
+
+class HandledBody(BaseModel):
+    kind: str
+    id: str
+    handled: bool = True
+
+
+@app.post("/api/handled")
+def api_handled(request: Request, body: HandledBody) -> JSONResponse:
+    _require_owner(request)
+    if not crm.mark_handled(body.kind, body.id, body.handled):
+        raise HTTPException(status_code=404)
+    return JSONResponse({"ok": True})
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("DASHBOARD_PORT", "8000")))
+    crm.init_db()
+    # A password means "meant to be reachable" — the owner opens this from a
+    # phone. Without one the page only answers locally anyway, so binding
+    # wider would just be surface area.
+    host = os.getenv("DASHBOARD_HOST", "0.0.0.0" if PASSWORD else "127.0.0.1")
+    uvicorn.run(app, host=host, port=int(os.getenv("DASHBOARD_PORT", "8000")))

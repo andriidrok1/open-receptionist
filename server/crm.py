@@ -27,6 +27,7 @@ import os
 import re
 import sqlite3
 import uuid
+from contextvars import ContextVar
 
 import phonenumbers
 from phonenumbers import NumberParseException, PhoneNumberFormat, ValidationResult
@@ -257,6 +258,29 @@ def normalize_resource(raw: str) -> str | None:
 # --------------------------------- database ---------------------------------
 
 
+#: Which call this task is writing on behalf of. A ContextVar rather than a
+#: module global because one process can hold two calls at once (two visitors
+#: on the same demo tab) — each call runs in its own task tree, and a global
+#: would stamp one caller's booking with the other caller's conversation.
+_current_call: ContextVar[str | None] = ContextVar("current_call", default=None)
+
+
+def set_current_call(call_id: str | None) -> None:
+    """Stamp everything written from here on (in this call's tasks) with the
+    call it came from.
+
+    bot.py sets this when a call connects. The owner's first question about any
+    booking is "what did they actually say?" — the stamp is what lets the
+    dashboard answer it with the exact conversation instead of a guess by
+    timestamps.
+    """
+    _current_call.set(call_id)
+
+
+def current_call_id() -> str | None:
+    return _current_call.get()
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -370,6 +394,17 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE bookings ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
             )
+        # The owner-workflow columns arrived with the dashboard inbox:
+        # handled_at is the owner's own checkmark (NULL = still needs them),
+        # call_id ties a record to the conversation it came out of,
+        # cancelled_at is when a booking was called off — the cancellation is
+        # an inbox item of its own, and it needs its own place in the feed.
+        for table, extra in (("bookings", ("cancelled_at",)), ("messages", ()), ("events", ())):
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            wanted = ("call_id",) + (("handled_at",) + extra if table != "events" else ())
+            for col in wanted:
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
         conn.commit()
 
 
@@ -789,8 +824,8 @@ def create_booking(
                 """
                 INSERT INTO bookings
                     (id, ref_code, resource, starts_at, ends_at, party_size,
-                     customer_name, phone, total_price, details)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     customer_name, phone, total_price, details, call_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     uuid.uuid4().hex,
@@ -803,6 +838,7 @@ def create_booking(
                     phone,
                     avail["total_price"],
                     json.dumps(details, ensure_ascii=False) if details else None,
+                    current_call_id(),
                 ),
             )
             conn.execute("COMMIT")
@@ -896,8 +932,13 @@ def cancel_booking(ref_code: str) -> dict:
             return {"success": False, "error": _err("booking_not_found", ref_code=ref_code)}
         if row["status"] != "active":
             return {"success": False, "error": _err("booking_already_cancelled")}
+        # handled_at is reset on purpose: the owner may have already ticked the
+        # booking off, and the cancellation is NEWS — it has to come back into
+        # the inbox as something a human still has to see.
         conn.execute(
-            "UPDATE bookings SET status = 'cancelled' WHERE ref_code = ?", (row["ref_code"],)
+            "UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now'),"
+            " handled_at = NULL WHERE ref_code = ?",
+            (row["ref_code"],),
         )
         conn.commit()
     label = (BOOK.resource(row["resource"]) or BOOK.resources[0]).label
@@ -940,9 +981,11 @@ def reschedule_booking(
         return out
 
     with _connect() as conn:
+        # Same reasoning as in cancel_booking: a moved job is new instructions
+        # for whoever drives out, so it goes back to "unhandled".
         conn.execute(
-            "UPDATE bookings SET resource = ?, starts_at = ?, ends_at = ?, total_price = ?"
-            " WHERE ref_code = ?",
+            "UPDATE bookings SET resource = ?, starts_at = ?, ends_at = ?, total_price = ?,"
+            " handled_at = NULL WHERE ref_code = ?",
             (
                 avail["resource"],
                 avail["starts_at"],
@@ -1012,8 +1055,8 @@ def log_event(kind: str, detail: str | None = None) -> None:
     try:
         with _connect() as conn:
             conn.execute(
-                "INSERT INTO events (id, kind, detail) VALUES (?, ?, ?)",
-                (uuid.uuid4().hex, kind, detail),
+                "INSERT INTO events (id, kind, detail, call_id) VALUES (?, ?, ?, ?)",
+                (uuid.uuid4().hex, kind, detail, current_call_id()),
             )
             conn.commit()
     except sqlite3.Error:
@@ -1056,12 +1099,14 @@ def take_message(customer_name: str, phone: str, topic: str) -> dict:
         topic = f"{topic.strip()} {L.text('notes.phone_unverified', phone=raw_digits)}"
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO messages (id, customer_name, phone, topic) VALUES (?, ?, ?, ?)",
+            "INSERT INTO messages (id, customer_name, phone, topic, call_id)"
+            " VALUES (?, ?, ?, ?, ?)",
             (
                 uuid.uuid4().hex,
                 (customer_name or "").strip() or BIZ.customer_nom.capitalize(),
                 stored_phone,
                 topic.strip(),
+                current_call_id(),
             ),
         )
         conn.commit()
@@ -1121,6 +1166,155 @@ def list_messages() -> list[dict]:
             "SELECT * FROM messages ORDER BY created_at DESC, rowid DESC"
         ).fetchall()
     return [{**dict(r), "created_at": _to_business_time(r["created_at"])} for r in rows]
+
+
+# ------------------------------ owner's inbox ------------------------------
+#
+# The dashboard used to be a report; the inbox makes it a to-do list. One feed
+# of everything a human still has to act on — a job to drive out to, a number
+# to call back, a booking that was called off — each with the owner's own
+# checkmark. The agent writes these rows; only the owner flips handled_at.
+
+
+def inbox(limit: int = 100) -> list[dict]:
+    """Bookings, cancellations and callback requests, newest first.
+
+    A cancelled booking appears once, as a cancellation — the original
+    "new booking" card would be stale news, and stale news trains the owner
+    to stop reading the feed. Its place in time is when it was cancelled,
+    not when it was made: that is the moment that needs the owner's eyes.
+    """
+    items: list[dict] = []
+    with _connect() as conn:
+        for r in conn.execute(
+            "SELECT * FROM bookings ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+        ):
+            res = BOOK.resource(r["resource"])
+            cancelled = r["status"] != "active"
+            items.append(
+                {
+                    "type": "cancellation" if cancelled else "booking",
+                    "id": r["id"],
+                    "ref_code": r["ref_code"],
+                    "customer_name": r["customer_name"],
+                    "phone": r["phone"],
+                    "resource_label": res.label if res else r["resource"],
+                    "starts_at": r["starts_at"],
+                    "ends_at": r["ends_at"],
+                    "party_size": r["party_size"],
+                    "total_price": r["total_price"],
+                    "details": json.loads(r["details"]) if r["details"] else {},
+                    "handled": bool(r["handled_at"]),
+                    "call_id": r["call_id"],
+                    "at": _to_business_time(
+                        (r["cancelled_at"] if cancelled else None) or r["created_at"]
+                    ),
+                }
+            )
+        for r in conn.execute(
+            "SELECT * FROM messages ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+        ):
+            items.append(
+                {
+                    "type": "message",
+                    "id": r["id"],
+                    "customer_name": r["customer_name"],
+                    "phone": r["phone"],
+                    "topic": r["topic"],
+                    "handled": bool(r["handled_at"]),
+                    "call_id": r["call_id"],
+                    "at": _to_business_time(r["created_at"]),
+                }
+            )
+    # The stamps are 'YYYY-MM-DD HH:MM:SS' in one timezone, so string order
+    # is time order.
+    items.sort(key=lambda x: x["at"], reverse=True)
+    return items[:limit]
+
+
+def mark_handled(kind: str, item_id: str, handled: bool = True) -> bool:
+    """The owner's checkmark on an inbox item. Returns False for an unknown id.
+
+    Reversible on purpose (handled=False puts the item back): a thumb on a
+    phone screen WILL tick the wrong card, and the cost of undo being missing
+    is an emergency job nobody drove out to.
+    """
+    table = {"booking": "bookings", "cancellation": "bookings", "message": "messages"}.get(kind)
+    if not table:
+        return False
+    with _connect() as conn:
+        cur = conn.execute(
+            f"UPDATE {table} SET handled_at = CASE WHEN ? THEN datetime('now') END"
+            " WHERE id = ?",
+            (1 if handled else 0, item_id),
+        )
+        conn.commit()
+    return cur.rowcount > 0
+
+
+def call_log(limit: int = 50) -> list[dict]:
+    """Recent calls for the dashboard, newest first — metrics plus what the
+    call amounted to.
+
+    The disposition comes from the database, not from parsing transcript lines:
+    a booking or message row stamped with this call's id IS the outcome, while
+    the transcript's tool lines mix successes with errors in the same format.
+    """
+    with _connect() as conn:
+        calls = conn.execute(
+            "SELECT id, started_at, created_at, metrics FROM calls"
+            " ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        booked = {
+            r["call_id"]: r["ref_code"]
+            for r in conn.execute(
+                "SELECT call_id, ref_code FROM bookings WHERE call_id IS NOT NULL"
+            )
+        }
+        messaged = {
+            r["call_id"]
+            for r in conn.execute(
+                "SELECT call_id FROM messages WHERE call_id IS NOT NULL"
+            )
+        }
+    out = []
+    for r in calls:
+        metrics = json.loads(r["metrics"]) if r["metrics"] else {}
+        if r["id"] in booked:
+            disposition, ref = "booked", booked[r["id"]]
+        elif r["id"] in messaged:
+            disposition, ref = "message", None
+        else:
+            disposition, ref = "none", None
+        out.append(
+            {
+                "call_id": r["id"],
+                "at": _to_business_time(r["created_at"]),
+                "duration_s": metrics.get("duration_s"),
+                "replies": metrics.get("replies"),
+                "cost": metrics.get("cost"),
+                "disposition": disposition,
+                "ref_code": ref,
+            }
+        )
+    return out
+
+
+def get_call(call_id: str) -> dict | None:
+    """One call in full — the transcript the inbox's "view call" opens."""
+    with _connect() as conn:
+        r = conn.execute("SELECT * FROM calls WHERE id = ?", (call_id,)).fetchone()
+    if r is None:
+        return None
+    return {
+        "call_id": r["id"],
+        "business": r["business"],
+        "started_at": r["started_at"],
+        "at": _to_business_time(r["created_at"]),
+        "lines": json.loads(r["lines"]),
+        "metrics": json.loads(r["metrics"]) if r["metrics"] else {},
+    }
 
 
 # ------------------------------ dashboard ------------------------------

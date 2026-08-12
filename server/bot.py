@@ -410,6 +410,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         business_key=BUSINESS.key,
         started_at=BUSINESS.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
+    # Everything the tools write during this call — bookings, messages, events —
+    # carries the call's id, so the dashboard can open the exact conversation a
+    # record came out of. A ContextVar under the hood: two concurrent calls in
+    # one process each stamp their own records.
+    crm.set_current_call(recorder.call_id)
 
     # agent_tools assembles the tool set and its handlers from the business
     # config: an information-only receptionist gets take_message alone, a hotel

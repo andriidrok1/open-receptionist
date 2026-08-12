@@ -432,3 +432,96 @@ def test_a_message_with_no_digits_at_all_is_still_refused():
     human could dial, and recording it would promise a callback to nobody."""
     r = crm.take_message("Dave", "CustomerPhone", "leak")
     assert r.get("success") is not True
+
+
+# ------------------------------ owner's inbox ------------------------------
+
+
+def test_inbox_items_carry_the_call_they_came_from():
+    """bot.py stamps the call at connect; everything the tools write during it
+    must point back at that conversation, or "view call" opens nothing."""
+    crm.set_current_call("call-inbox-1")
+    out = crm.create_booking(ROOM, iso(40), "Тарас Вхідний", "0632096974", iso(41))
+    assert out["success"], out
+    msg = crm.take_message("Оля Дзвінкова", "0501234567", "передзвоніть щодо рахунку")
+    assert msg["success"], msg
+    crm.set_current_call(None)
+
+    items = crm.inbox()
+    booking = next(x for x in items if x.get("ref_code") == out["ref_code"])
+    message = next(x for x in items if x["type"] == "message" and x["customer_name"] == "Оля Дзвінкова")
+    assert booking["call_id"] == "call-inbox-1"
+    assert message["call_id"] == "call-inbox-1"
+    assert booking["handled"] is False and message["handled"] is False
+
+
+def test_the_owners_checkmark_flips_both_ways():
+    """A thumb on a phone WILL tick the wrong card — undo must exist."""
+    out = crm.create_booking(ROOM, iso(42), "Тарас Галочка", "0632096974", iso(43))
+    item = next(x for x in crm.inbox() if x.get("ref_code") == out["ref_code"])
+
+    assert crm.mark_handled("booking", item["id"]) is True
+    assert next(x for x in crm.inbox() if x["id"] == item["id"])["handled"] is True
+
+    assert crm.mark_handled("booking", item["id"], handled=False) is True
+    assert next(x for x in crm.inbox() if x["id"] == item["id"])["handled"] is False
+
+    assert crm.mark_handled("booking", "no-such-row") is False
+    assert crm.mark_handled("nonsense-kind", item["id"]) is False
+
+
+def test_a_cancellation_comes_back_as_unhandled_news():
+    """The owner ticked the booking off; then the customer called it off.
+    The cancellation must reappear in the feed as a new, unhandled item —
+    otherwise a crew drives out to a job that no longer exists."""
+    out = crm.create_booking(ROOM, iso(44), "Тарас Скасований", "0632096974", iso(45))
+    item = next(x for x in crm.inbox() if x.get("ref_code") == out["ref_code"])
+    crm.mark_handled("booking", item["id"])
+
+    assert crm.cancel_booking(out["ref_code"])["success"]
+
+    again = next(x for x in crm.inbox() if x["id"] == item["id"])
+    assert again["type"] == "cancellation"
+    assert again["handled"] is False
+
+
+def test_a_reschedule_puts_the_booking_back_in_front_of_the_owner():
+    """A moved job is new instructions for whoever drives out."""
+    out = crm.create_booking(ROOM, iso(46), "Тарас Перенесений", "0632096974", iso(47))
+    item = next(x for x in crm.inbox() if x.get("ref_code") == out["ref_code"])
+    crm.mark_handled("booking", item["id"])
+
+    moved = crm.reschedule_booking(out["ref_code"], iso(48), iso(49))
+    assert moved["success"], moved
+
+    again = next(x for x in crm.inbox() if x["id"] == item["id"])
+    assert again["handled"] is False
+
+
+def test_call_log_disposition_comes_from_the_database_not_the_transcript():
+    """A booking row stamped with the call's id IS the outcome; parsing the
+    transcript's tool lines would confuse successes with errors."""
+    crm.set_current_call("call-log-booked")
+    out = crm.create_booking(ROOM, iso(50), "Тарас Журнал", "0632096974", iso(51))
+    assert out["success"], out
+    crm.set_current_call(None)
+
+    crm.save_call({
+        "call_id": "call-log-booked", "business": "hotel",
+        "started_at": "2026-08-12 10:00:00",
+        "lines": [{"at": 0, "who": "agent", "text": "Добрий день!"}],
+        "metrics": {"duration_s": 42.0, "replies": 3},
+    })
+    crm.save_call({
+        "call_id": "call-log-empty", "business": "hotel",
+        "started_at": "2026-08-12 10:05:00", "lines": [], "metrics": {},
+    })
+
+    log = {c["call_id"]: c for c in crm.call_log()}
+    assert log["call-log-booked"]["disposition"] == "booked"
+    assert log["call-log-booked"]["ref_code"] == out["ref_code"]
+    assert log["call-log-empty"]["disposition"] == "none"
+
+    full = crm.get_call("call-log-booked")
+    assert full["lines"][0]["text"] == "Добрий день!"
+    assert crm.get_call("no-such-call") is None
