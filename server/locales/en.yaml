@@ -313,6 +313,9 @@ tools:
   # purpose: someone who stepped away needs a nudge, not a speech.
   idle_check: Are you still there?
   idle_goodbye: I'll let you go for now. Call back any time — bye!
+  # Spoken when a call reaches the assistant outside its duty hours (the owner
+  # answers in person during those hours — dashboard → settings).
+  off_duty: Thanks for calling {brand}! At this hour our team answers calls in person, so the assistant is off duty. Please call back later — goodbye!
 
   # Spoken INSTEAD of a reply that confirmed a booking nobody made. The agent
   # has been caught saying "your appointment is set, your reference is APT-5678"
@@ -545,6 +548,22 @@ dashboard:
   cancel_failed: Could not cancel — refresh and try again.
   search_placeholder: Search — name, phone, address
   no_results: Nothing matches the search.
+  # Settings: when does the assistant answer the phone.
+  settings: Settings
+  bot_answers: When the assistant answers
+  mode_always: Always
+  mode_schedule: By schedule
+  mode_off: Never (paused)
+  schedule_hint: Tick the hours when you answer the phone yourself — the assistant covers all the remaining time. A day left unticked is fully covered by the assistant.
+  i_answer: I answer myself
+  from_label: from
+  to_label: to
+  save: Save
+  saved: Saved
+  save_failed: Could not save — check the hours and try again.
+  owner_answering: you answer now
+  bot_paused: assistant paused
+  on_duty: on duty
   # The sign-in page.
   login_title: Owner sign-in
   password: Password

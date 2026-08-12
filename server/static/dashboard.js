@@ -91,6 +91,7 @@ const PATHS = {
   check: "M4 12l5 5L20 6",
   chat: "M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z",
   mic: "M9 3h6v11a3 3 0 0 1-6 0z M6 11a6 6 0 0 0 12 0 M12 17v4",
+  gear: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z",
 };
 
 function Icon({ d, size = 20 }) {
@@ -108,14 +109,25 @@ function NavButton({ icon, label, active, count, onClick }) {
   </button>`;
 }
 
-function AgentState({ ui, online }) {
-  return html`<div className="agent-state" style=${online ? {} : { color: "var(--crit)" }}>
-    <span className="dot" style=${online ? {} : { background: "var(--crit)" }}></span>
-    ${online ? ui.agent_online : ui.agent_offline}
+/* Two separate truths, one indicator: red = the process is dead (nobody
+ * answers), amber = alive but the owner has this shift (dashboard settings),
+ * green = the assistant is picking up. */
+function dutyColor(online, onDuty) {
+  return !online ? "var(--crit)" : !onDuty ? "var(--warn)" : "var(--good)";
+}
+function dutyLabel(ui, online, onDuty) {
+  return !online ? ui.agent_offline : !onDuty ? ui.owner_answering : ui.agent_online;
+}
+
+function AgentState({ ui, online, onDuty }) {
+  const color = dutyColor(online, onDuty);
+  return html`<div className="agent-state" style=${{ color }}>
+    <span className="dot" style=${{ background: color }}></span>
+    ${dutyLabel(ui, online, onDuty)}
   </div>`;
 }
 
-function Sidebar({ biz, ui, view, setView, newCount, online }) {
+function Sidebar({ biz, ui, view, setView, newCount, online, onDuty }) {
   return html`<aside className="sidebar">
     <div className="brand">
       <div className="crest"><${Icon} d="mic" size=${24} /></div>
@@ -129,6 +141,8 @@ function Sidebar({ biz, ui, view, setView, newCount, online }) {
         onClick=${() => setView("calls")} />
       <${NavButton} icon="grid" label=${ui.overview} active=${view === "overview"}
         onClick=${() => setView("overview")} />
+      <${NavButton} icon="gear" label=${ui.settings} active=${view === "settings"}
+        onClick=${() => setView("settings")} />
     </nav>
     <div className="agent-card">
       <div className="agent-row">
@@ -136,7 +150,7 @@ function Sidebar({ biz, ui, view, setView, newCount, online }) {
         <div>
           <div className="agent-role">${ui.agent_role}</div>
           <div className="agent-name">${biz.agent}</div>
-          <${AgentState} ui=${ui} online=${online} />
+          <${AgentState} ui=${ui} online=${online} onDuty=${onDuty} />
         </div>
       </div>
       ${biz.auth && html`<a className="signout" href="/logout">${ui.sign_out}</a>`}
@@ -154,6 +168,7 @@ function TabBar({ ui, view, setView, newCount }) {
     ${tab("inbox", "inbox", ui.inbox, newCount)}
     ${tab("calls", "phone", ui.calls, 0)}
     ${tab("overview", "grid", ui.overview, 0)}
+    ${tab("settings", "gear", ui.settings, 0)}
   </nav>`;
 }
 
@@ -497,6 +512,68 @@ function Overview({ stats, biz, ui }) {
   </div>`;
 }
 
+/* ------------------------------ settings ------------------------------ */
+
+const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+function Settings({ biz, ui, onSaved }) {
+  const [schedule, setSchedule] = useState(null);
+  const [status, setStatus] = useState("");
+  useEffect(() => {
+    get("/api/settings").then((r) => setSchedule(r.schedule)).catch(() => {});
+  }, []);
+  if (!schedule) return null;
+
+  const names = biz.weekdays_short || DAYS;
+  const setDay = (d, patch) =>
+    setSchedule({
+      ...schedule,
+      owner_hours: { ...schedule.owner_hours, [d]: { ...schedule.owner_hours[d], ...patch } },
+    });
+
+  const save = async () => {
+    setStatus("…");
+    const ok = await post("/api/settings", schedule);
+    setStatus(ok ? ui.saved : ui.save_failed);
+    if (ok) onSaved();
+    setTimeout(() => setStatus(""), 3000);
+  };
+
+  const modes = [["always", ui.mode_always], ["schedule", ui.mode_schedule], ["off", ui.mode_off]];
+  return html`<div className="card settings-card">
+    <div className="card-title">${ui.bot_answers}</div>
+    <div className="chips" style=${{ margin: "14px 0" }}>
+      ${modes.map(([key, label]) => html`<button key=${key}
+        className=${"chip" + (schedule.mode === key ? " active" : "")}
+        onClick=${() => setSchedule({ ...schedule, mode: key })}>${label}</button>`)}
+    </div>
+    ${schedule.mode === "schedule" && html`
+      <div className="hint">${ui.schedule_hint}</div>
+      <div>
+        ${DAYS.map((d, i) => {
+          const span = schedule.owner_hours[d];
+          return html`<div className=${"dayrow" + (span.enabled ? "" : " off")} key=${d}>
+            <label className="dayname">
+              <input type="checkbox" checked=${span.enabled}
+                onChange=${(e) => setDay(d, { enabled: e.target.checked })} />
+              ${names[i]}
+            </label>
+            <span className="daylabel">${span.enabled ? ui.i_answer : ""}</span>
+            <input type="time" value=${span.from} disabled=${!span.enabled}
+              onInput=${(e) => setDay(d, { from: e.target.value })} />
+            <span className="daylabel">${ui.to_label}</span>
+            <input type="time" value=${span.to} disabled=${!span.enabled}
+              onInput=${(e) => setDay(d, { to: e.target.value })} />
+          </div>`;
+        })}
+      </div>`}
+    <div className="savebar">
+      <button className="savebtn" onClick=${save}>${ui.save}</button>
+      <span className="savemsg">${status}</span>
+    </div>
+  </div>`;
+}
+
 /* -------------------------------- app -------------------------------- */
 
 function App() {
@@ -507,6 +584,7 @@ function App() {
   const [view, setView] = useState("inbox");
   const [openCall, setOpenCall] = useState(null);
   const [online, setOnline] = useState(true);
+  const [onDuty, setOnDuty] = useState(true);
   const viewRef = useRef(view);
   viewRef.current = view;
 
@@ -516,6 +594,7 @@ function App() {
     setBiz(inbox.business);
     setItems(inbox.items);
     setOnline(inbox.agent_online !== false);
+    setOnDuty(inbox.agent_on_duty !== false);
     if (viewRef.current === "calls") setCalls((await get("/api/calls")).calls);
     if (viewRef.current === "overview") setStats(await get("/api/stats"));
   }, []);
@@ -558,10 +637,11 @@ function App() {
 
   if (!biz) return null;
   const ui = biz.ui;
-  const title = { inbox: ui.inbox, calls: ui.calls, overview: ui.overview }[view];
+  const title = { inbox: ui.inbox, calls: ui.calls, overview: ui.overview, settings: ui.settings }[view];
 
   return html`<div className="app">
-    <${Sidebar} biz=${biz} ui=${ui} view=${view} setView=${setView} newCount=${newCount} online=${online} />
+    <${Sidebar} biz=${biz} ui=${ui} view=${view} setView=${setView} newCount=${newCount}
+      online=${online} onDuty=${onDuty} />
     <main className="main">
       <div className="topbar">
         <div>
@@ -570,8 +650,8 @@ function App() {
         </div>
         <div className="pills">
           <div className="pill">
-            <span className="dot" style=${online ? {} : { background: "var(--crit)" }}></span>
-            <span><span className="strong">${biz.agent}</span> · ${((online ? ui.agent_online : ui.agent_offline) || "").toLowerCase()}</span>
+            <span className="dot" style=${{ background: dutyColor(online, onDuty) }}></span>
+            <span><span className="strong">${biz.agent}</span> · ${(dutyLabel(ui, online, onDuty) || "").toLowerCase()}</span>
           </div>
         </div>
       </div>
@@ -582,6 +662,8 @@ function App() {
         onHandled=${onHandled} onViewCall=${setOpenCall} onCancel=${onCancel} />`}
       ${view === "calls" && html`<${Calls} calls=${calls} ui=${ui} onOpen=${setOpenCall} />`}
       ${view === "overview" && html`<${Overview} stats=${stats} biz=${biz} ui=${ui} />`}
+      ${view === "settings" && html`<${Settings} biz=${biz} ui=${ui}
+        onSaved=${() => refresh().catch(() => {})} />`}
     </main>
     <${TabBar} ui=${ui} view=${view} setView=${setView} newCount=${newCount} />
     ${openCall && html`<${Transcript} callId=${openCall} ui=${ui} onClose=${() => setOpenCall(null)} />`}

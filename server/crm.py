@@ -369,6 +369,20 @@ def init_db() -> None:
             )
             """
         )
+        # Owner-editable runtime state (currently the agent's duty schedule).
+        # In the database rather than the YAML because the YAML belongs to the
+        # installer and a config change means a restart; "the bot answers
+        # nights and weekends" is the owner's decision, made from a phone,
+        # taking effect on the next call.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         # What was actually said. The event log answers "which tools ran"; this
         # answers "what did it say to them", which is the question an owner
         # actually asks.
@@ -1230,6 +1244,79 @@ def inbox(limit: int = 100) -> list[dict]:
     # is time order.
     items.sort(key=lambda x: x["at"], reverse=True)
     return items[:limit]
+
+
+def get_setting(key: str, default=None):
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    try:
+        return json.loads(row["value"])
+    except ValueError:
+        return default
+
+
+def set_setting(key: str, value) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value,"
+            " updated_at = excluded.updated_at",
+            (key, json.dumps(value, ensure_ascii=False)),
+        )
+        conn.commit()
+
+
+# ------------------------------ agent duty ------------------------------
+#
+# When does the MACHINE answer the phone? Plenty of businesses want the
+# assistant as a night dispatcher: staff pick up in person during the day, the
+# bot covers nights and weekends. The owner states their own hours — the hours
+# a human answers — and the bot is on duty the rest of the time. Their own
+# hours is how an owner thinks ("I answer 8 to 6"), and it degrades safely:
+# a day they forgot to describe is a day the bot covers, and a missing or
+# broken setting means the bot answers always. Every failure mode leaves the
+# phone answered by someone.
+
+_DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def agent_schedule() -> dict:
+    """The stored schedule, normalised: mode + the owner's own hours per day."""
+    raw = get_setting("agent_schedule") or {}
+    mode = raw.get("mode")
+    if mode not in ("always", "schedule", "off"):
+        mode = "always"
+    hours = {}
+    for day in _DAY_KEYS:
+        span = (raw.get("owner_hours") or {}).get(day) or {}
+        hours[day] = {
+            "enabled": bool(span.get("enabled")),
+            "from": span.get("from") or "09:00",
+            "to": span.get("to") or "18:00",
+        }
+    return {"mode": mode, "owner_hours": hours}
+
+
+def agent_on_duty(now: datetime | None = None) -> bool:
+    """Should the assistant pick up right now?"""
+    schedule = agent_schedule()
+    if schedule["mode"] == "off":
+        return False
+    if schedule["mode"] == "always":
+        return True
+    now = now or BIZ.now()
+    span = schedule["owner_hours"][_DAY_KEYS[now.weekday()]]
+    if not span["enabled"]:
+        return True  # nobody answers in person today — the bot covers it
+    hm = now.strftime("%H:%M")
+    start, end = span["from"], span["to"]
+    if start <= end:
+        owner_answers = start <= hm < end
+    else:  # an overnight human shift, e.g. 18:00–02:00
+        owner_answers = hm >= start or hm < end
+    return not owner_answers
 
 
 def mark_handled_by_ref(ref_code: str) -> bool:

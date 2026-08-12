@@ -23,6 +23,7 @@ import asyncio
 import hashlib
 import hmac
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -145,6 +146,8 @@ BUSINESS_INFO = {
     # Intake answers are stored under config keys ("address", "problem");
     # these are the human labels the cards print next to them.
     "intake_labels": {f.key: f.label for f in BOOK.intake},
+    # Monday-first, matching crm._DAY_KEYS — the settings grid's row labels.
+    "weekdays_short": BUSINESS.pack.raw("calendar.weekdays_short"),
     # Whether the page runs behind a password — the UI offers "sign out" only
     # when there is a session to sign out of.
     "auth": bool(PASSWORD),
@@ -236,6 +239,9 @@ async def api_inbox(request: Request) -> JSONResponse:
             "items": crm.inbox(),
             "business": BUSINESS_INFO,
             "agent_online": await _agent_online(),
+            # Two different truths about the agent: online is "is the process
+            # alive", on_duty is "is it supposed to pick up right now".
+            "agent_on_duty": crm.agent_on_duty(),
             # Today at the business, for the cards' "today vs date" labels.
             "today": datetime.now(ZoneInfo(BUSINESS.tz)).strftime("%Y-%m-%d"),
         }
@@ -255,6 +261,43 @@ def api_call(request: Request, call_id: str) -> JSONResponse:
     if call is None:
         raise HTTPException(status_code=404)
     return JSONResponse(call)
+
+
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+@app.get("/api/settings")
+def api_settings(request: Request) -> JSONResponse:
+    _require_owner(request)
+    return JSONResponse(
+        {"schedule": crm.agent_schedule(), "on_duty_now": crm.agent_on_duty()}
+    )
+
+
+class ScheduleBody(BaseModel):
+    mode: str
+    owner_hours: dict = {}
+
+
+@app.post("/api/settings")
+def api_settings_save(request: Request, body: ScheduleBody) -> JSONResponse:
+    _require_owner(request)
+    # Validated here, at the door: agent_on_duty() runs at the start of every
+    # call, and a malformed span must not be able to take the phone down.
+    if body.mode not in ("always", "schedule", "off"):
+        raise HTTPException(status_code=422)
+    hours = {}
+    for day, span in (body.owner_hours or {}).items():
+        if day not in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+            raise HTTPException(status_code=422)
+        start, end = str(span.get("from", "")), str(span.get("to", ""))
+        if not (_TIME_RE.match(start) and _TIME_RE.match(end)):
+            raise HTTPException(status_code=422)
+        hours[day] = {"enabled": bool(span.get("enabled")), "from": start, "to": end}
+    crm.set_setting("agent_schedule", {"mode": body.mode, "owner_hours": hours})
+    return JSONResponse(
+        {"ok": True, "schedule": crm.agent_schedule(), "on_duty_now": crm.agent_on_duty()}
+    )
 
 
 class CancelBody(BaseModel):

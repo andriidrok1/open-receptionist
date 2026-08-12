@@ -122,6 +122,41 @@ def test_cancel_is_locked_without_a_session():
     assert r.status_code == 401
 
 
+# ------------------------------ duty schedule ------------------------------
+
+
+def test_schedule_saves_validates_and_reads_back():
+    c = fresh_client()
+    c.post("/api/login", json={"password": "s3cret-test"})
+    try:
+        r = c.post("/api/settings", json={
+            "mode": "schedule",
+            "owner_hours": {"mon": {"enabled": True, "from": "08:00", "to": "18:00"}},
+        })
+        assert r.status_code == 200
+        saved = c.get("/api/settings").json()["schedule"]
+        assert saved["mode"] == "schedule"
+        assert saved["owner_hours"]["mon"]["enabled"] is True
+
+        # Broken input must bounce at the door — agent_on_duty() runs at the
+        # start of every call and a bad span must not take the phone down.
+        assert c.post("/api/settings", json={"mode": "sometimes"}).status_code == 422
+        assert c.post("/api/settings", json={
+            "mode": "schedule", "owner_hours": {"mon": {"from": "8am", "to": "18:00"}},
+        }).status_code == 422
+        assert c.post("/api/settings", json={
+            "mode": "schedule", "owner_hours": {"someday": {"from": "08:00", "to": "18:00"}},
+        }).status_code == 422
+    finally:
+        c.post("/api/settings", json={"mode": "always"})
+
+
+def test_settings_are_locked_without_a_session():
+    c = fresh_client()
+    assert c.get("/api/settings").status_code == 401
+    assert c.post("/api/settings", json={"mode": "off"}).status_code == 401
+
+
 # ------------------------------ agent health ------------------------------
 
 

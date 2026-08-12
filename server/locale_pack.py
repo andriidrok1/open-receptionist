@@ -45,6 +45,7 @@ REQUIRED_KEYS = (
     "settings.speech_language",
     "settings.default_voice_id",
     "calendar.weekdays",
+    "tools.off_duty",
     "calendar.weekdays_short",
     "calendar.closed",
     "calendar.round_clock",

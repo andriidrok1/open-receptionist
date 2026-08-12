@@ -525,3 +525,63 @@ def test_call_log_disposition_comes_from_the_database_not_the_transcript():
     full = crm.get_call("call-log-booked")
     assert full["lines"][0]["text"] == "Добрий день!"
     assert crm.get_call("no-such-call") is None
+
+
+# ------------------------------ agent duty ------------------------------
+
+
+def test_agent_duty_follows_the_owners_hours():
+    """The owner states when THEY answer; the bot covers everything else,
+    including days the owner never described."""
+    from datetime import datetime as dt
+
+    try:
+        crm.set_setting("agent_schedule", {
+            "mode": "schedule",
+            "owner_hours": {"mon": {"enabled": True, "from": "08:00", "to": "18:00"}},
+        })
+        monday_noon = dt(2026, 8, 10, 12, 0)
+        monday_night = dt(2026, 8, 10, 23, 0)
+        tuesday_noon = dt(2026, 8, 11, 12, 0)
+        assert crm.agent_on_duty(monday_noon) is False   # the owner's shift
+        assert crm.agent_on_duty(monday_night) is True   # night dispatcher
+        assert crm.agent_on_duty(tuesday_noon) is True   # undescribed day
+    finally:
+        crm.set_setting("agent_schedule", {"mode": "always"})
+
+
+def test_agent_duty_modes_and_the_safe_default():
+    """Every failure mode must leave the phone answered: no setting, or a
+    broken one, means the bot picks up."""
+    try:
+        crm.set_setting("agent_schedule", {"mode": "off"})
+        assert crm.agent_on_duty() is False
+        crm.set_setting("agent_schedule", {"mode": "always"})
+        assert crm.agent_on_duty() is True
+        crm.set_setting("agent_schedule", {"mode": "whenever-i-feel-like-it"})
+        assert crm.agent_on_duty() is True
+    finally:
+        crm.set_setting("agent_schedule", {"mode": "always"})
+
+
+def test_agent_duty_overnight_owner_shift():
+    from datetime import datetime as dt
+
+    try:
+        crm.set_setting("agent_schedule", {
+            "mode": "schedule",
+            "owner_hours": {"mon": {"enabled": True, "from": "18:00", "to": "02:00"}},
+        })
+        assert crm.agent_on_duty(dt(2026, 8, 10, 23, 0)) is False
+        assert crm.agent_on_duty(dt(2026, 8, 10, 1, 0)) is False
+        assert crm.agent_on_duty(dt(2026, 8, 10, 12, 0)) is True
+    finally:
+        crm.set_setting("agent_schedule", {"mode": "always"})
+
+
+def test_settings_round_trip_and_default():
+    assert crm.get_setting("never-written", "fallback") == "fallback"
+    crm.set_setting("test-key", {"a": 1})
+    assert crm.get_setting("test-key") == {"a": 1}
+    crm.set_setting("test-key", [2, 3])  # overwrite, not duplicate
+    assert crm.get_setting("test-key") == [2, 3]

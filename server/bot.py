@@ -585,6 +585,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     async def greet_first() -> None:
         """The agent speaks first: a short greeting on behalf of the business."""
+        # Unless the owner has taken this shift themselves (dashboard →
+        # settings). Checked per call, not per process: the owner flips the
+        # schedule from a phone and expects the very next call to obey.
+        if not crm.agent_on_duty():
+            crm.log_event("off_duty", None)
+            await say(L.text("tools.off_duty", brand=BUSINESS.brand))
+            call_ender.request("off duty")
+            return
         context.add_message({"role": "developer", "content": greeting_hint()})
         await worker.queue_frames([LLMRunFrame()])
 

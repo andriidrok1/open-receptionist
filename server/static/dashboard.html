@@ -202,6 +202,34 @@
   }
   .empty svg { width: 34px; height: 34px; stroke: var(--muted); margin-bottom: 10px; }
 
+  /* ---------- Settings ---------- */
+  .settings-card { max-width: 640px; margin-top: 18px; }
+  .hint { color: var(--ink-2); font-size: 13px; line-height: 1.5; margin-bottom: 14px; }
+  .dayrow {
+    display: grid; grid-template-columns: 92px 1fr auto auto auto; gap: 10px;
+    align-items: center; padding: 8px 0; border-top: 1px solid var(--hair);
+  }
+  .dayrow.off { color: var(--muted); }
+  .dayname { display: flex; align-items: center; gap: 9px; font-weight: 600; cursor: pointer; }
+  .dayname input { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
+  .daylabel { color: var(--muted); font-size: 12.5px; text-align: right; }
+  .dayrow input[type="time"] {
+    border: 1px solid var(--hair); border-radius: 9px; padding: 6px 9px;
+    font-family: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+  }
+  .dayrow input[type="time"]:disabled { color: var(--muted); background: var(--bg); }
+  .savebar { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+  .savebtn {
+    background: var(--primary); color: #fff; border: 0; border-radius: 11px;
+    padding: 10px 26px; font-weight: 700; font-size: 14px; cursor: pointer; font-family: inherit;
+  }
+  .savebtn:hover { filter: brightness(1.06); }
+  .savemsg { color: var(--ink-2); font-size: 13px; }
+  @media (max-width: 560px) {
+    .dayrow { grid-template-columns: 80px auto auto auto; }
+    .daylabel:first-of-type { display: none; }
+  }
+
   /* ---------- Calls ---------- */
   .calls { display: flex; flex-direction: column; gap: 10px; max-width: 760px; margin-top: 18px; }
   .callrow {
