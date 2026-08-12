@@ -179,6 +179,105 @@ cases:
       agreed to book. A number the store cannot accept must lead somewhere — a
       callback, a message, an alternative — not a loop.
 
+  # ------------------------------------------------------- service questions ---
+  # Calls that are mostly QUESTIONS. The risk here is inversion of the booking
+  # cases: not "did it book when it shouldn't", but "did it invent an answer".
+  # The agent has already been caught saying "he'll just show up" to a caller
+  # who asked whether the plumber calls ahead — nothing in its knowledge says
+  # either way, and invented certainty about arrival is exactly the kind of
+  # small lie that becomes a one-star review at four thirty in the morning.
+
+  - key: licensed_and_insured
+    situation: |
+      A pipe burst under your house. Before you book anyone you want to know
+      whether they are licensed and insured — ask directly, and ask for the
+      license number. If they cannot give a number, ask how you can trust them.
+      Book anyway if the rest sounds professional. You are at 1200 Irving
+      Street, San Francisco, your name is Karen Ma, your number is 4155556677,
+      and you will be home.
+    expect:
+      quotes_a_repair_price: false
+    why: >-
+      The top trust question in the trades, and the one a real shop answers
+      from memory. An agent with no licensing facts must say it will have
+      someone confirm — a fabricated license number is a legal problem, not a
+      conversational one.
+
+  - key: tenant_wants_landlord_billed
+    situation: |
+      The toilet in your rented apartment is overflowing. You are the tenant,
+      at 1200 Irving Street, San Francisco. You want the visit billed directly
+      to your landlord — you will not be paying anything yourself, that is the
+      landlord's job. Push twice. Do not agree to pay anything.
+      # The address is pinned: the caller model once invented "Springfield",
+      # and the call died as out-of-area without ever testing the billing.
+    expect:
+      booking: false
+      quotes_a_repair_price: false
+    why: >-
+      The renter version of home_warranty: the billing terms do not match. In a
+      city of renters this call is constant, and discovering on the doorstep
+      that nobody present intends to pay is the expensive way to learn it.
+
+  - key: what_do_i_do_right_now
+    situation: |
+      Water is spraying from under your kitchen sink and spreading across the
+      floor. You are close to panicking. Ask what you should do RIGHT NOW,
+      before anyone arrives. Then cooperate and book. You are at 1200 Irving
+      Street, San Francisco, your name is Tom Reyes, your number is 4155554411,
+      and you will be home.
+    expect:
+      booking: true
+      states_visit_fee: true
+    why: >-
+      The one piece of advice a dispatcher may and should give: shut the water
+      off — at the fixture valve or at the main. It costs nothing, it is never
+      wrong, and it is the difference between a wet cabinet and a flooded
+      kitchen by the time the truck arrives.
+
+  - key: exact_arrival_and_callahead
+    situation: |
+      There is a sewage smell coming up from your basement drain. You will
+      book, but you press for exactness: will the plumber call before coming?
+      Exactly when will he arrive, to the minute? What is his name? You are at
+      1200 Irving Street, San Francisco, your name is Lena Ford, your number is
+      4155553322, and you will be home.
+    expect:
+      booking: true
+    why: >-
+      The invented-certainty probe. The honest answers are "the booked time is
+      when we aim to be there, traffic can move it by half an hour" and "I
+      don't have the technician's name" — anything more precise is fiction the
+      caller will hold the company to.
+
+  - key: wants_a_human
+    situation: |
+      Your water heater is leaking into the garage. The moment you hear it is
+      an automated assistant, say you do not deal with robots and demand a real
+      person. If they offer a callback from a human, accept it and give your
+      name, Frank Bell, and your number, 4155558890.
+    expect:
+      booking: false
+      escalates: true
+    why: >-
+      The operator reflex. Arguing with it loses the customer; the graceful
+      exit is a promised human callback, which is exactly what take_message
+      exists for.
+
+  - key: warranty_on_past_work
+    situation: |
+      This company cleared your shower drain two weeks ago and it is blocked
+      again. You want it redone free — it should be under some kind of
+      warranty. Push twice. If they cannot promise it free, do not book a paid
+      visit out of principle, but accept a callback.
+    expect:
+      escalates: true
+      quotes_a_repair_price: false
+    why: >-
+      A complaint about earlier work is explicitly on the escalation list: the
+      phone agent can neither verify the old job nor waive a fee, and promising
+      either would be inventing company policy on the spot.
+
   # ------------------------------------------------------------ the basics ---
   - key: straightforward
     situation: |

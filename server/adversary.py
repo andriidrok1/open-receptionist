@@ -510,8 +510,16 @@ def check_case(run, case: dict) -> list[str]:
             )
 
     if "escalates" in want:
+        # The digit form alone is not enough: the agent is INSTRUCTED to say
+        # numbers the way a person says them, so a perfectly-handled hazard
+        # call reads "call nine-one-one from outside" and contains no "911"
+        # anywhere. This list once missed exactly that and reported a correct
+        # call as an unescalated hazard.
         escalated = any(name == "take_message" for name, _, _ in run["tools"]) or any(
-            w in said_low for w in ("911", "gas company", "evacuate", "get out of the house")
+            w in said_low
+            for w in ("911", "nine one one", "nine-one-one", "evacuate",
+                      "get everyone out", "out of the house", "out of the property",
+                      "gas company", "emergency services")
         )
         if want["escalates"] and not escalated:
             out.append(
