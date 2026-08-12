@@ -59,7 +59,10 @@ BASE_PORT = int(os.getenv("DEMO_BASE_PORT", "7860"))
 #: `ss -tlnp` says which is which.
 MODEL_PORT_STRIDE = int(os.getenv("DEMO_MODEL_PORT_STRIDE", "10"))
 DEMO_PORT = int(os.getenv("DEMO_PORT", "8080"))
-MAX_CALL_SECONDS = int(os.getenv("MAX_CALL_SECONDS", "180"))
+# Six minutes: three was enough for a scripted demo and not for a real
+# conversation — a live caller dictating a phone number in bursts and
+# changing the day once got cut off mid-recap, one "yes" short of a booking.
+MAX_CALL_SECONDS = int(os.getenv("MAX_CALL_SECONDS", "360"))
 
 
 def bot_port(key: str, model_id: str | None = None) -> int:
