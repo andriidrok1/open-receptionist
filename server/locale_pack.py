@@ -107,6 +107,8 @@ REQUIRED_KEYS = (
     "errors.intake_missing",
     "errors.intake_refused",
     "errors.giving_up",
+    "notes.phone_unverified",
+    "notes.message_recorded_unverified",
     "errors.address.not_found",
     "errors.address.out_of_area",
     "errors.no_space",

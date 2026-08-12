@@ -81,6 +81,7 @@ def test_reference_pack_uses_only_names_the_code_passes(lang=REFERENCE):
         "fields", "price", "currency", "day", "month", "label", "date",
         "start", "end", "units", "money", "action", "topic", "n", "changes",
         "ref_code", "address", "area", "city", "ref_prefix", "time_end", "fee",
+        "phone",
     }
     pack = load_locale(lang)
     unknown = {k: _placeholders(pack, k) - known for k in REQUIRED_KEYS

@@ -437,6 +437,13 @@ errors:
 
 notes:
   message_recorded: the request is recorded, someone will get in touch
+  # A callback request whose number failed validation is still recorded —
+  # a person reads these, and a person copes with an odd number. The flag
+  # in the topic is for them; the note is for the agent to say out loud.
+  phone_unverified: "[number as spoken, could not be verified: {phone}]"
+  message_recorded_unverified: >-
+    the request is recorded, but the number could not be verified — tell the
+    caller someone will get back to them and may double-check the number
   # What the bot says when a demo call runs into its time limit.
   call_time_limit: Sorry, this demo call is time-limited. Have a good one!
 

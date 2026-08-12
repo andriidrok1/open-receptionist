@@ -398,3 +398,37 @@ def test_storing_a_call_never_raises():
         raise RuntimeError("store is down")
 
     rec.finish(explode, {})  # must not propagate
+
+
+# --------------------- the escape hatch takes any spoken number ---------------
+
+
+def test_a_message_with_an_unverifiable_number_is_still_recorded():
+    """The loop breaker's exit. "Can't put the booking through, I'll take a
+    message" — and take_message bounced the same unusable number, closing the
+    last way out: the caller was promised a callback nothing recorded. A
+    callback request is read by a person, and a person copes with a foreign
+    number, so it is stored as spoken and flagged."""
+    r = crm.take_message("Dave", "07983227651", "leaking pipes under the sink")
+    assert r["success"] is True, r
+    assert r["note"] == crm.L.text("notes.message_recorded_unverified")
+    flag = crm.L.text("notes.phone_unverified", phone="07983227651")
+    with crm._connect() as conn:
+        row = conn.execute(
+            "SELECT phone, topic FROM messages ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    assert row["phone"] == "07983227651"
+    assert flag in row["topic"]
+
+
+def test_a_message_with_a_valid_number_is_stored_clean():
+    r = crm.take_message("Dave", "0501234567", "callback about pricing")
+    assert r["success"] is True, r
+    assert r["note"] == crm.L.text("notes.message_recorded")
+
+
+def test_a_message_with_no_digits_at_all_is_still_refused():
+    """"As spoken" needs something spoken: with no digits there is nothing a
+    human could dial, and recording it would promise a callback to nobody."""
+    r = crm.take_message("Dave", "CustomerPhone", "leak")
+    assert r.get("success") is not True

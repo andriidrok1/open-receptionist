@@ -1031,24 +1031,46 @@ def list_events(since: str = "") -> list[dict]:
 
 
 def take_message(customer_name: str, phone: str, topic: str) -> dict:
-    """Record a callback request (a question outside the booking flow)."""
-    phone, phone_error = validate_phone(phone)
-    if phone_error:
+    """Record a callback request (a question outside the booking flow).
+
+    A phone number the validator refuses does NOT refuse the message — that
+    distinction is the whole escape hatch. A booking's number gets dialled
+    blind, so it must be valid; a callback request is read by a person, who
+    can cope with a foreign number or a missing digit. Enforcing the same bar
+    on both closed the last exit: the loop breaker said "can't put the
+    booking through, I'll take a message", and take_message bounced the very
+    same number — the caller was promised a callback that nothing recorded.
+
+    The one guard that still applies is upstream: digits nobody ever said are
+    refused in call_tool before reaching here. An unverifiable-but-spoken
+    number is stored as spoken, flagged for the human who will dial it.
+    """
+    valid_phone, phone_error = validate_phone(phone)
+    raw_digits = re.sub(r"\D", "", phone or "")
+    if phone_error and not raw_digits:
         return {"success": False, "error": phone_error}
     if not (topic and topic.strip()):
         return {"success": False, "error": _err("message_no_topic")}
+    stored_phone = (valid_phone or raw_digits).strip()
+    if phone_error:
+        topic = f"{topic.strip()} {L.text('notes.phone_unverified', phone=raw_digits)}"
     with _connect() as conn:
         conn.execute(
             "INSERT INTO messages (id, customer_name, phone, topic) VALUES (?, ?, ?, ?)",
             (
                 uuid.uuid4().hex,
                 (customer_name or "").strip() or BIZ.customer_nom.capitalize(),
-                phone.strip(),
+                stored_phone,
                 topic.strip(),
             ),
         )
         conn.commit()
-    return {"success": True, "note": L.text("notes.message_recorded")}
+    out = {"success": True, "note": L.text("notes.message_recorded")}
+    if phone_error:
+        # The agent should tell the caller the number may need re-checking
+        # when someone calls back, not pretend it went through cleanly.
+        out["note"] = L.text("notes.message_recorded_unverified")
+    return out
 
 
 # ------------------------------ reading ------------------------------
