@@ -32,27 +32,36 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import phonenumbers
 import yaml
 from dotenv import load_dotenv
 from locale_pack import DEFAULT_LANGUAGE, load_locale
 
-# A business named explicitly on the command line has to win over .env,
-# otherwise `BUSINESS=clinic python bot.py` silently starts the hotel, because
-# load_dotenv below runs with override=True. Hence: remember the choice BEFORE
-# reading the file.
+# Kept for the readers below; the environment now wins on its own (see the note
+# on load_dotenv), so these are a record of what was asked for rather than a
+# rescue from .env.
 _CLI_BUSINESS = os.environ.get("BUSINESS")
 _CLI_CONFIG = os.environ.get("BUSINESS_CONFIG")
-# Same trap, and a worse one: crm reads CRM_DB after this module has already run
-# load_dotenv(override=True), so a CRM_DB line in .env silently outranked the
-# path a test or the simulator had just set — and the simulator wipes whatever
-# database it is given.
 CLI_CRM_DB = os.environ.get("CRM_DB")
 
 # .env is read here rather than in bot.py: the business is selected when this
 # module is imported, which is earlier than bot.py could load the variables.
 # The path is explicit — without it load_dotenv fails when the module is run
 # from somewhere other than server/.
-load_dotenv(Path(__file__).parent / ".env", override=True)
+#
+# override=False, i.e. .env supplies DEFAULTS and anything already exported
+# wins. It used to be the other way round, and that quietly cost real work three
+# times: `BUSINESS=clinic python bot.py` started the hotel; a CRM_DB set by the
+# simulator was ignored, pointing a database-wiping run at the demo data; and
+# `ELEVENLABS_TTS_MODEL=... python run_demo.py` ran the old model while
+# reporting nothing. The first two were patched one variable at a time, by
+# reading them before this line — which fixes those two and leaves the trap open
+# for every variable added afterwards.
+#
+# The cost of the swap is that a stale exported variable is no longer corrected
+# by editing .env. That is the ordinary convention, and it is the one the
+# project's own instructions assume every time they say `BUSINESS=clinic`.
+load_dotenv(Path(__file__).parent / ".env", override=False)
 
 BUSINESSES_DIR = Path(__file__).parent / "businesses"
 
@@ -95,6 +104,10 @@ class IntakeField:
     label: str
     description: str = ""
     required: bool = True
+    #: An extra check to run on the answer, beyond "it is not empty".
+    #: Currently only "address", which looks the answer up in a gazetteer —
+    #: see address.py for why a spoken street name cannot be trusted as heard.
+    validate: str = ""
 
 
 @dataclass(frozen=True)
@@ -125,6 +138,17 @@ class BookingConfig:
     hours: dict[str, str | None] = field(default_factory=dict)
     resources: tuple[Resource, ...] = ()
     intake: tuple[IntakeField, ...] = ()
+    #: Where this business will actually go: city names, postcodes, or both.
+    #: Empty means no limit. Checked against the CANONICAL address rather than
+    #: against what the caller said, so it only bites once an address has been
+    #: verified — a refusal has to rest on a fact, not on a mishearing.
+    #:
+    #: This is the first of the disqualification rules practitioners say matter
+    #: most: the calls that waste a truck are the ones outside the area, outside
+    #: the trade, or with nobody old enough to open the door. All of them are
+    #: fixed facts, which is exactly what a config can hold and a model should
+    #: not be asked to remember.
+    service_area: tuple[str, ...] = ()
 
     @property
     def is_slots(self) -> bool:
@@ -381,9 +405,11 @@ def load_business(key: str | None = None) -> Business:
                 label=f["label"],
                 description=f.get("description", ""),
                 required=bool(f.get("required", True)),
+                validate=(f.get("validate") or "").strip().lower(),
             )
             for f in (b.get("intake") or [])
         ),
+        service_area=tuple(str(x) for x in (b.get("service_area") or ())),
     )
     # A unit the pack has no forms for degrades silently into "2 ніч" being read
     # out loud, so it is refused here instead.
@@ -457,9 +483,39 @@ def _speech_rules(biz: Business) -> str:
     )
 
 
+def _local_phone_digits(country: str) -> int | None:
+    """How many digits a local number has here, per libphonenumber.
+
+    From the same library that later rejects the number, so the prompt and the
+    store cannot disagree — and taken from a real example number for the
+    country rather than written into a table that would go stale as numbering
+    plans change.
+    """
+    try:
+        example = phonenumbers.example_number(country)
+        return len(phonenumbers.national_significant_number(example)) if example else None
+    except Exception:  # noqa: BLE001 — an unknown country is not worth a crash
+        return None
+
+
 def _phone_rules(biz: Business) -> str:
-    """How to read a phone number out loud — the same for every industry."""
-    return biz.pack.text("prompt.phone_rules", customer_nom=biz.customer_nom)
+    """How to read a phone number out loud — the same for every industry.
+
+    The digit count is in there because of a real call: the caller gave nine
+    digits, the agent read the whole booking back to them, they said yes, and
+    only then did the store reject the number — so the recap had to be done
+    twice and the agent looked like it had not been listening. The store is
+    still the authority; this just moves the catch to before the summary rather
+    than after it.
+    """
+    digits = _local_phone_digits(biz.country)
+    return biz.pack.text(
+        "prompt.phone_rules",
+        customer_nom=biz.customer_nom,
+        phone_digits=(
+            biz.pack.text("prompt.phone_digits", n=digits, country=biz.country) if digits else ""
+        ),
+    )
 
 
 def _intake_rules(biz: Business) -> str:
@@ -523,6 +579,34 @@ def _booking_flow(biz: Business) -> str:
     )
 
 
+#: How far ahead the prompt spells the calendar out. Two weeks covers "next
+#: Monday", "a week from Thursday" and "the end of the month" for anything
+#: booked by phone, at a cost of fourteen short lines.
+CALENDAR_DAYS = 14
+
+
+def _calendar_lines(biz: Business, now: datetime) -> str:
+    """The next fortnight as weekday-and-date pairs.
+
+    Telling the model the date and expecting it to work out which day "Monday"
+    is turns out not to work: asked for Monday on a Tuesday, it answered
+    "Monday, August fourteenth" — a Friday — and booked it. Nothing downstream
+    could catch that, because the weekday never reaches the tools; only the date
+    does, and that date was a real, bookable, open slot.
+
+    Language models are unreliable at date arithmetic and reliable at reading a
+    list, so this hands them the list. It needs no new keys in the pack: the
+    weekday names are already there, and an ISO date is the same in every
+    language.
+    """
+    names = biz.pack.raw("calendar.weekdays")
+    days = []
+    for offset in range(CALENDAR_DAYS):
+        day = (now + timedelta(days=offset)).date()
+        days.append(f"{names[day.weekday()]} {day.isoformat()}")
+    return "\n".join(days)
+
+
 def build_system_prompt(biz: Business | None = None) -> str:
     biz = biz or BUSINESS
     now = biz.now()
@@ -544,6 +628,7 @@ def build_system_prompt(biz: Business | None = None) -> str:
             time=biz.pack.time(now),
             customer_nom=biz.customer_nom,
             slots_suffix=biz.pack.text("prompt.date_hint_slots_suffix") if bk.is_slots else "",
+            calendar=_calendar_lines(biz, now),
         ),
         biz.pack.text("prompt.about", knowledge=biz.knowledge),
     ]

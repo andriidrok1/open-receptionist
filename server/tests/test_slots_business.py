@@ -46,6 +46,8 @@ at = lambda h, m=0: f"{day.isoformat()}T{h:02d}:{m:02d}"
 out = {
     "key": BUSINESS.key,
     "language": BUSINESS.language,
+    "day": day.isoformat(),
+    "weekdays": list(BUSINESS.pack.raw("calendar.weekdays")),
     "round_clock": book.is_round_clock(day),
     "ok": crm.check_availability(res.label, at(hours[0].hour, hours[0].minute)),
     "before_opening": crm.check_availability(res.label, at(max(hours[0].hour - 2, 0))),
@@ -157,3 +159,24 @@ def test_a_full_hour_offers_alternatives(key, probes):
 def test_take_message_works(key, probes):
     """Every escalation goes through this, and nothing tested it."""
     assert probes[key]["message"].get("success") is True, probes[key]["message"]
+
+
+@pytest.mark.parametrize("key", SLOTS_BUSINESSES)
+def test_the_spoken_slot_names_the_real_weekday(key, probes):
+    """The weekday the agent says out loud comes from the store, not its memory.
+
+    Listing the fortnight in the prompt made this error rarer and did not end it:
+    asked for a Thursday, the agent picked a Tuesday and called it Thursday, with
+    the correct calendar in front of it. Nothing downstream catches that — the
+    date is real and the slot is free — so the weekday has to arrive as a fact
+    alongside the price, in the same sentence the agent is told to read out.
+    """
+    from datetime import date
+
+    p = probes[key]
+    spoken = p["ok"].get("spoken") or ""
+    names = p["weekdays"]
+    real = names[date.fromisoformat(p["day"]).weekday()]
+    assert real in spoken, f"{key}: {spoken!r} does not name {real!r} ({p['day']})"
+    others = [n for n in names if n != real and n in spoken]
+    assert not others, f"{key}: {spoken!r} also names {others}"

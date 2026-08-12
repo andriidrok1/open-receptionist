@@ -28,7 +28,7 @@ Strategy and milestones live in the Obsidian vault:
 
 ```bash
 cd server
-../.venv/bin/python -m pytest tests/ -q      # 117 tests, ~1s, no network, no keys
+../.venv/bin/python -m pytest tests/ -q      # 136 tests, ~8s, no network, no keys
 BUSINESS=clinic ../.venv/bin/python bot.py   # one bot          → :7860/client
 ../.venv/bin/python run_demo.py              # six bots + showcase → :8080
 BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
@@ -50,7 +50,7 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Voice pipeline (browser) | works | live calls ending in a booking |
 | Six businesses, two languages | works | showcase renders all six correctly |
 | Language layer | works | a third language was assembled and run with zero Python changes |
-| Booking, capacity, hours, horizon | works | 117 deterministic tests |
+| Booking, capacity, hours, horizon | works | 136 deterministic tests |
 | Cancel / reschedule / find by phone | works | tests + a live English call |
 | Call transcripts + cost/latency metrics | works | live calls; stored per call |
 | Semantic end-of-turn | works, effect unproven | classifier right on 16 cases; paired A/B inconclusive |
@@ -58,6 +58,8 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Concurrency guard | works | 10 threads racing for 3 places; mutation-tested |
 | Phone numbers per country | works | UA and US, ~30 formats |
 | Owner dashboard | works, both languages | browser check, no Cyrillic on the English one |
+| Showcase page language picker | works | English by default, switches without a reload, choice survives F5 |
+| Dates the agent books | fixed | the prompt now lists 14 days with their weekdays; mutation-tested |
 | eval / simulate | work in both languages | dental_us 4/4, Ukrainian unchanged |
 | Telephony | **UNVERIFIED** | code wired, never tested on a real number |
 
@@ -74,8 +76,9 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 3. **No CI, no clean-machine install check.** The tests need neither network nor
    keys, so CI is an hour's work. The README's install instructions have never
    been followed on a machine that did not already have everything.
-4. **English voice is a placeholder.** Picked from the premade list, not by ear.
-   The Ukrainian one went through `voice_lab.py` and a blind comparison.
+4. **English voice is still Rachel**, the oldest premade ElevenLabs voice, and
+   it sounds like it. Ten candidates are synthesised and waiting to be picked
+   by ear: `python voice_lab.py --lang en serve --port 8090`.
 5. **Secrets and cost are global.** One `.env` for every business, so an agency
    cannot separate clients' keys or bills.
 6. **`call_tool` is synchronous** inside an async pipeline. Microseconds with
@@ -144,6 +147,19 @@ free.
 names, past times, closing hours, capacity, duration. Every rule moved from the
 prompt into `crm` stopped being violated.
 
+**The model cannot do calendar arithmetic, and fails silently at it.** Asked for
+Monday on a Tuesday, it answered "Monday, August fourteenth" — a Friday — and
+booked it. Nothing downstream can catch this: only the date reaches the tools,
+and it was a real, open slot. The prompt now lists fourteen days with their
+weekdays and forbids counting. Assume the same for anything else arithmetical.
+
+**bot.py is the least tested file in the project and the one every call uses.**
+Building the pipeline needs a live transport, keys and a microphone, so nothing
+executes it. A name used thirty lines before it was assigned killed every call
+at connect while 117 tests stayed green. `tests/test_static.py` runs a linter
+over the modules for exactly that class of bug — it reads code instead of
+running it.
+
 **A test whose docstring names a bug it cannot catch is worse than none.** Three
 were found here: the overbooking test ran sequentially, the spoken-summary test
 matched substrings inside a sentence full of numbers, and the Cyrillic check
@@ -202,7 +218,7 @@ server/
   locales/          uk.yaml, en.yaml — the language
   businesses/       six configs — the business
   scenarios/        uk.yaml, en.yaml — test callers and eval data
-  tests/            117 deterministic tests
+  tests/            136 deterministic tests
 docs/README.uk.md   the older, more detailed Ukrainian documentation
 ```
 
@@ -214,4 +230,7 @@ and no Python.
 
 ## Uncommitted right now
 
-Nothing.
+The date fix, the phone-length rule, the localised showcase page with its
+language picker, `voice_lab.py` made language-agnostic, and the static-analysis
+test. Ten English voices are synthesised in `voice_lab_out/` and waiting for
+someone to listen and choose.

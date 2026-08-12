@@ -16,8 +16,11 @@ The comparison is fair: every voice reads THE SAME two lines, with the same
 model and speed as bot.py. The first line is a greeting, the second is a booking
 confirmation full of numbers — the hardest thing for TTS to get right.
 
-The sample phrases are Ukrainian because that is the language the tool was built
-for. Picking a voice for another language means replacing them; TODO(locale).
+Which language is being auditioned comes from `--lang` (default en), and with it
+the sample phrases and which voices the library is searched for: both live in
+`locales/<lang>.yaml` under `voice_lab`. That section is optional — this is a
+development tool, so a language pack that omits it still runs a bot, it just
+cannot audition voices until someone writes two sentences.
 """
 
 import argparse
@@ -29,10 +32,15 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import tts_settings
 from dotenv import load_dotenv
 
+from locale_pack import load_locale
+
 SERVER_DIR = Path(__file__).resolve().parent
-load_dotenv(SERVER_DIR / ".env", override=True)
+# Defaults only — the lab exists to try values other than the configured
+# ones, and .env winning would make every override silently a no-op.
+load_dotenv(SERVER_DIR / ".env", override=False)
 
 API = "https://api.elevenlabs.io/v1"
 KEY = os.getenv("ELEVENLABS_API_KEY", "")
@@ -40,30 +48,55 @@ KEY = os.getenv("ELEVENLABS_API_KEY", "")
 OUT_DIR = SERVER_DIR / "voice_lab_out"
 STATE_FILE = SERVER_DIR / "voice_lab_state.json"
 
-# The same as in bot.py, so what you hear equals what the agent will say.
-DEFAULT_MODEL = os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
-DEFAULT_SPEED = float(os.getenv("ELEVENLABS_SPEED", "0.95"))
+# The same as in bot.py, so what you hear equals what the agent will say — and
+# from the same module, because "the same" written out twice stopped being true.
+# The lab used to synthesise at style 0.0 while calls ran at 1.0, which is the
+# difference between a flat read and a lively one: voices were being judged on a
+# recording the product never makes.
+DEFAULT_MODEL = tts_settings.MODEL
+DEFAULT_SPEED = tts_settings.SPEED
 
-# Baseline: the previous English voice, so the difference can be heard rather
-# than guessed at.
-BASELINE = {"voice_id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah (previous, EN voice)", "baseline": True}
+# Filled in by _use_language() before any command runs. Module-level because the
+# HTML page and the accent experiment both quote the phrases back, and threading
+# them through six commands buys nothing.
+LANG = "en"
+SAMPLES: list[tuple[str, str]] = []
+#: The voice currently configured for this language, so the question is "is this
+#: better than what we ship?" rather than "is this nice?" — the second question
+#: has no answer.
+BASELINE: dict = {}
 
-SAMPLES = [
-    (
-        "greeting",
-        "Добрий день! Готель «Рів'єра», мене звати Оксана. Чим можу допомогти?",
-    ),
-    (
-        "booking",
-        "Отже, номер Покращений на двох, з чотирнадцятого по сімнадцяте липня, "
-        "три ночі. Разом п'ять тисяч чотириста гривень. Підтверджуєте бронювання?",
-    ),
-]
 
-# The same phrases with stress marks (U+0301, combining acute).
+def _use_language(lang: str) -> None:
+    """Point the lab at one language: its phrases, its voices, its baseline."""
+    global LANG, SAMPLES, BASELINE
+    pack = load_locale(lang)
+    conf = pack.raw("voice_lab", None)
+    if not conf:
+        sys.exit(
+            f"the {lang} pack has no `voice_lab:` section — add search_language, "
+            "search_terms and two samples (greeting, booking) to "
+            f"locales/{lang}.yaml, or use --lang on a pack that has them"
+        )
+    samples = conf.get("samples") or {}
+    missing = [k for k in ("greeting", "booking") if not samples.get(k)]
+    if missing:
+        sys.exit(f"locales/{lang}.yaml → voice_lab.samples is missing: {', '.join(missing)}")
+
+    LANG = lang
+    SAMPLES = [("greeting", samples["greeting"]), ("booking", samples["booking"])]
+    BASELINE = {
+        "voice_id": pack.raw("settings.default_voice_id"),
+        "name": f"currently shipping ({lang})",
+        "baseline": True,
+    }
+
+
+# Ukrainian-only: the same phrases with stress marks (U+0301, combining acute).
 # The hypothesis was that the model reads the mark and stops guessing. It did not
 # hold — see the note at the top of speech_text.py — but the fixture is kept so
-# the experiment can be repeated if the voice or the model ever changes.
+# the experiment can be repeated if the voice or the model ever changes. There is
+# no English equivalent, because English orthography does not mark stress.
 SAMPLES_ACCENTED = [
     (
         "greeting",
@@ -115,22 +148,35 @@ def check_key():
     return body
 
 
-def _is_ukrainian(v: dict) -> bool:
-    if (v.get("language") or "").lower() in ("uk", "ukr", "ukrainian"):
+def _speaks(v: dict, code: str) -> bool:
+    """Whether this library voice is verified in the language being auditioned.
+
+    Two places carry it — the voice's own `language` and the per-language
+    verification list — and a voice is worth hearing if either says yes.
+    """
+    code = code.lower()
+    if (v.get("language") or "").lower() == code:
         return True
-    for lang in v.get("verified_languages") or []:
-        if (lang.get("language") or "").lower() in ("uk", "ukr", "ukrainian"):
-            return True
-    return False
+    return any(
+        (lang.get("language") or "").lower() == code
+        for lang in v.get("verified_languages") or []
+    )
 
 
 def find_voices(limit: int = 12) -> list[dict]:
-    """Candidates from the library: filter by language first, then search by word."""
+    """Candidates from the library: filter by language first, then search by word.
+
+    The word searches are there because the language filter alone misses voices
+    whose owner never verified a language but whose description says plainly
+    what they are.
+    """
+    conf = load_locale(LANG).raw("voice_lab")
+    code = conf.get("search_language", LANG)
     found: dict[str, dict] = {}
-    queries = [
-        "/shared-voices?" + urllib.parse.urlencode({"language": "uk", "page_size": 100}),
-        "/shared-voices?" + urllib.parse.urlencode({"search": "ukrainian", "page_size": 100}),
-        "/shared-voices?" + urllib.parse.urlencode({"search": "українська", "page_size": 100}),
+    queries = ["/shared-voices?" + urllib.parse.urlencode({"language": code, "page_size": 100})]
+    queries += [
+        "/shared-voices?" + urllib.parse.urlencode({"search": term, "page_size": 100})
+        for term in conf.get("search_terms") or []
     ]
     for q in queries:
         st, body = _req("GET", q)
@@ -138,7 +184,7 @@ def find_voices(limit: int = 12) -> list[dict]:
             print(f"  (query {q.split('?')[1][:40]}… → {st})")
             continue
         for v in body.get("voices", []):
-            if _is_ukrainian(v) and v.get("voice_id") not in found:
+            if _speaks(v, code) and v.get("voice_id") not in found:
                 found[v["voice_id"]] = v
 
     voices = list(found.values())
@@ -170,6 +216,36 @@ def cmd_list(args):
         )
         if v.get("description"):
             print(f"    {v['description'][:110]}")
+
+
+def _pick_voice(spec: str, state: dict) -> dict:
+    """One voice from the collection, named by id or by part of its name.
+
+    Refuses to guess. `--only Eryn` matched "Kat-eryn-a Pavlenko" first, so two
+    whole rounds of style comparison were synthesised on a Ukrainian voice
+    reading English — and nothing said so, because the filenames carry ids and
+    the page carries settings. A silently wrong subject is the worst outcome an
+    experiment can have: the numbers look fine and the conclusion is rubbish.
+
+    A prefix match wins outright, since that is what someone typing a name
+    means. Anything else must be unambiguous.
+    """
+    voices = list(state["added"].values())
+    low = spec.lower()
+
+    exact = [v for v in voices if v["voice_id"] == spec]
+    prefix = [v for v in voices if v["name"].lower().startswith(low)]
+    partial = [v for v in voices if low in v["name"].lower()]
+
+    for group in (exact, prefix, partial):
+        if len(group) == 1:
+            return group[0]
+        if len(group) > 1:
+            names = "\n  ".join(f'{v["name"]}  ({v["voice_id"]})' for v in group)
+            sys.exit(f'"{spec}" matches more than one voice — be more specific:\n  {names}')
+
+    sys.exit(f'"{spec}" is not in the collection. Known:\n  ' +
+             "\n  ".join(v["name"] for v in voices))
 
 
 def _load_state() -> dict:
@@ -214,22 +290,27 @@ def synth(
     model: str,
     speed: float,
     dest: Path,
-    stability: float = 0.5,
-    style: float = 0.0,
+    stability: float | None = None,
+    style: float | None = None,
 ) -> bool:
+    """Synthesise one sample.
+
+    stability and style default to what a real call uses. They used to default
+    to 0.5 and 0.0 — plausible numbers, and neither of them the product's — so
+    the whole comparison was made on a voice nobody would ever hear. The
+    experiment commands below still pass their own values on purpose; `build`
+    must not.
+    """
+    settings = tts_settings.as_dict()
+    settings["speed"] = speed
+    if stability is not None:
+        settings["stability"] = stability
+    if style is not None:
+        settings["style"] = style
     st, body = _req(
         "POST",
         f"/text-to-speech/{voice_id}?output_format=mp3_44100_128",
-        {
-            "text": text,
-            "model_id": model,
-            "voice_settings": {
-                "stability": stability,
-                "similarity_boost": 0.75,
-                "style": style,
-                "speed": speed,
-            },
-        },
+        {"text": text, "model_id": model, "voice_settings": settings},
         raw=True,
     )
     if st != 200:
@@ -238,6 +319,48 @@ def synth(
         return False
     dest.write_bytes(body)
     return True
+
+
+def _account_voices(spec: str | None) -> list[dict]:
+    """Voices already in the account, named by id or by part of their name.
+
+    Matching by name is what makes this usable from a terminal: `--also
+    jessica,bella` reads, `--also cgSgspJ2msm6clMCkdW9,hpp4J3VqNfWAUOO0d1Us`
+    does not, and a typo in a raw id fails silently as a 404 during synthesis.
+    """
+    if not spec:
+        return []
+    st, body = _req("GET", "/voices")
+    if st != 200 or not isinstance(body, dict):
+        print(f"  ! could not read the account's voices ({st}) — skipping --also")
+        return []
+    have = body.get("voices", [])
+    out, seen = [], set()
+    for want in [s.strip() for s in spec.split(",") if s.strip()]:
+        low = want.lower()
+        hit = next(
+            (v for v in have if v["voice_id"] == want or low in (v.get("name") or "").lower()),
+            None,
+        )
+        if not hit:
+            print(f"  ! no voice in the account matches {want!r}")
+            continue
+        if hit["voice_id"] in seen:
+            continue
+        seen.add(hit["voice_id"])
+        labels = hit.get("labels") or {}
+        out.append(
+            {
+                "voice_id": hit["voice_id"],
+                "name": hit.get("name"),
+                "gender": labels.get("gender", ""),
+                "age": labels.get("age", ""),
+                "accent": labels.get("accent", ""),
+                "description": hit.get("description") or labels.get("description") or "",
+                "in_account": True,
+            }
+        )
+    return out
 
 
 def cmd_build(args):
@@ -251,17 +374,26 @@ def cmd_build(args):
         idx = [int(x) for x in args.pick.split(",")]
         pool = find_voices(max(idx))
         voices = [pool[i - 1] for i in idx if 0 < i <= len(pool)]
+    elif args.limit == 0:
+        voices = []
     else:
         voices = find_voices(args.limit)
+
+    # Voices that are ALREADY in the account — the premade set, or ones a
+    # previous audition kept. They cost no slot, and plans cap how many custom
+    # voices may be held at once: with the cap nearly full, adding one more from
+    # the library means deleting a voice another language is using. So they are
+    # auditioned in the same comparison rather than being off limits.
+    voices = _account_voices(args.also) + voices
     if not voices:
         sys.exit("No candidates — run `python voice_lab.py list` first")
 
-    print(f"\nSynthesising {len(voices)} voices + baseline, model {args.model}, speed {args.speed}\n")
+    print(f"\nSynthesising {len(voices)} voices + baseline\n  {tts_settings.summary()}\n")
     rows = []
 
     for v in [BASELINE] + voices:
         name = v.get("name")
-        if v.get("baseline"):
+        if v.get("baseline") or v.get("in_account"):
             vid = v["voice_id"]
         else:
             vid = add_to_collection(v, state)
@@ -300,6 +432,11 @@ def cmd_build(args):
 
 
 def _write_html(rows, model, speed):
+    # On the page, not just in the terminal: a comparison is only meaningful
+    # alongside the settings it was made at, and those are what made the first
+    # version of this page misleading.
+    settings = f"{model} · speed {speed} · stability {tts_settings.STABILITY} · style {tts_settings.STYLE}"
+
     def card(r):
         tag = (
             '<span class="badge base">current</span>'
@@ -344,7 +481,7 @@ def _write_html(rows, model, speed):
   .txt b {{ color:#e7e9ee; }}
 </style></head><body>
 <h1>Voice comparison</h1>
-<div class="sub">model {model} · speed {speed} · every voice reads the same text</div>
+<div class="sub">{settings} · every voice reads the same text</div>
 <div class="txt">
   <b>greeting:</b> {SAMPLES[0][1]}<br>
   <b>booking + numbers:</b> {SAMPLES[1][1]}
@@ -416,6 +553,81 @@ PAUSE_LABELS = {
 }
 
 
+def cmd_models(args):
+    """The same voice, the same line, on several synthesis models.
+
+    Flash is chosen for latency, and the question this answers is what that
+    costs in quality — and whether a heavier model is worth it when latency is
+    not the binding constraint. Since our replies carry pause markup, it also
+    shows whether break tags survive: they are documented for some models and
+    silently ignored by others, and "silently" means the only way to find out is
+    to listen.
+    """
+    check_key()
+    state = _load_state()
+    target = _pick_voice(args.only, state)
+    OUT_DIR.mkdir(exist_ok=True)
+
+    text = dict(SAMPLES)["booking"]
+    if args.breaks:
+        # Our own pause layer inserts these on every booking recap, so the
+        # comparison should contain one — a model that reads "break time zero
+        # point four s" aloud is unusable for us whatever it sounds like.
+        text = text.replace(", ", ',<break time="0.4s" /> ', 1)
+
+    rows = []
+    for model in args.models.split(","):
+        model = model.strip()
+        fname = f"model_{target['voice_id']}_{model}.mp3"
+        # speed is not accepted by every model (v3 has no such parameter), so a
+        # rejection is reported rather than silently retried without it: a
+        # comparison at a different speed is not a comparison.
+        if not synth(target["voice_id"], text, model, args.speed, OUT_DIR / fname):
+            rows.append({"model": model, "file": None, "ttfb": None, "note": "refused"})
+            print(f"  ✗ {model} — refused, see the error above")
+            continue
+        runs = [
+            _ttfb_ms(target["voice_id"], text, model, args.speed,
+                     tts_settings.STABILITY, tts_settings.STYLE)
+            for _ in range(3)
+        ]
+        runs = [r for r in runs if r]
+        med = sorted(runs)[len(runs) // 2] if runs else None
+        rows.append({"model": model, "file": fname, "ttfb": med, "note": ""})
+        print(f"  ✓ {model}" + (f" — median TTFB {med:.0f}ms" if med else ""))
+
+    cards = "".join(
+        f'<div class=card><div class=k>{r["model"]}'
+        + (f' <span>· TTFB {r["ttfb"]:.0f}ms</span>' if r["ttfb"] else "")
+        + (f' <span>· {r["note"]}</span>' if r["note"] else "")
+        + "</div>"
+        + (f'<audio controls preload="none" src="{r["file"]}"></audio>' if r["file"] else "")
+        + "</div>"
+        for r in rows
+    )
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>synthesis models</title>
+<style>
+  body {{ font:15px/1.5 -apple-system, system-ui, sans-serif; background:#0f1115; color:#e7e9ee;
+         margin:0; padding:32px; max-width:760px; }}
+  h1 {{ font-size:22px; margin:0 0 4px; }}
+  .sub {{ color:#8b93a7; font-size:13px; margin-bottom:8px; }}
+  .txt {{ background:#171a21; border:1px solid #242938; border-radius:12px; padding:14px 16px;
+          margin-bottom:20px; font-size:13px; color:#b9c0d0; }}
+  .card {{ background:#171a21; border:1px solid #242938; border-radius:12px; padding:14px 16px;
+           margin-bottom:12px; }}
+  .k {{ font-size:14px; margin-bottom:8px; }} .k span {{ color:#8b93a7; font-size:12px; }}
+  audio {{ width:100%; height:34px; }}
+</style></head><body>
+<h1>synthesis models</h1>
+<div class="sub">{target['name']} · speed {args.speed} · stability {tts_settings.STABILITY}
+ · style {tts_settings.STYLE}</div>
+<div class="txt">{text.replace("<", "&lt;")}</div>
+{cards}</body></html>"""
+    (OUT_DIR / "models.html").write_text(html, encoding="utf-8")
+    print(f"\nDone → {OUT_DIR / 'models.html'}")
+
+
 def _ttfb_ms(voice_id: str, text: str, model: str, speed: float, stability: float, style: float):
     """Time to the first chunk of audio — what is actually felt in conversation."""
     import time
@@ -460,15 +672,10 @@ def cmd_final(args):
     from speech_text import SpeechTextFilter
 
     state = _load_state()
-    target = next(
-        (i for i in state["added"].values() if args.only.lower() in i["name"].lower()), None
-    )
-    if not target:
-        sys.exit(f'Voice "{args.only}" not found')
+    target = _pick_voice(args.only, state)
     OUT_DIR.mkdir(exist_ok=True)
 
-    stab = float(os.getenv("ELEVENLABS_STABILITY", "0.4"))
-    style = float(os.getenv("ELEVENLABS_STYLE", "1.0"))
+    stab, style = tts_settings.STABILITY, tts_settings.STYLE
     speech = SpeechTextFilter()
 
     lines = [
@@ -538,14 +745,14 @@ def cmd_style(args):
     """How much expression `style` buys — and what it costs in milliseconds."""
     check_key()
     state = _load_state()
-    target = next(
-        (i for i in state["added"].values() if args.only.lower() in i["name"].lower()), None
-    )
-    if not target:
-        sys.exit(f'Voice "{args.only}" is not in the collection')
+    target = _pick_voice(args.only, state)
     OUT_DIR.mkdir(exist_ok=True)
 
-    text = PAUSE_TEXTS["break"] if args.breaks else PROSODY_TEXTS["live"]
+    # The booking sample, not the greeting: ElevenLabs' own documentation says
+    # style above 0 makes the model "slightly less stable", and instability
+    # surfaces where there is no meaning to fall back on — a date, a price, a
+    # reference code. A greeting would hide exactly the failure being tested.
+    text = PAUSE_TEXTS["break"] if args.breaks else dict(SAMPLES)["booking"]
     rows = []
     # A value is either a plain style ("0.7") or a style@stability pair
     # ("1.0@0.55"): high style with low stability tends to wander, so it is worth
@@ -554,10 +761,21 @@ def cmd_style(args):
         style_s, _, stab_s = item.partition("@")
         style = float(style_s)
         stab = float(stab_s) if stab_s else args.stability
-        fname = f"style_{target['voice_id']}_{style}_{stab}.mp3"
-        if not synth(
-            target["voice_id"], text, args.model, args.speed, OUT_DIR / fname, stab, style
-        ):
+        # Several takes of the SAME setting, because stability is defined as the
+        # randomness BETWEEN generations. One clip per setting shows you one roll
+        # of the dice and tells you nothing about the spread — which is the whole
+        # quantity being set. ElevenLabs say as much: "generate a few times until
+        # you find a performance you like". A low-stability setting that sounds
+        # perfect once and wanders on the next take is a bad setting, and a
+        # single sample cannot show that.
+        files = []
+        for take in range(args.takes):
+            fname = f"style_{target['voice_id']}_{style}_{stab}_{take + 1}.mp3"
+            if synth(
+                target["voice_id"], text, args.model, args.speed, OUT_DIR / fname, stab, style
+            ):
+                files.append(fname)
+        if not files:
             continue
         runs = [
             _ttfb_ms(target["voice_id"], text, args.model, args.speed, stab, style)
@@ -565,11 +783,10 @@ def cmd_style(args):
         ]
         runs = [r for r in runs if r]
         med = sorted(runs)[len(runs) // 2] if runs else None
-        rows.append({"style": style, "stab": stab, "file": fname, "ttfb": med})
+        rows.append({"style": style, "stab": stab, "file": files[0], "files": files, "ttfb": med})
         print(
-            f"  ✓ style {style} / stab {stab} — median TTFB {med:.0f}ms"
-            if med
-            else f"  ✓ style {style} / stab {stab}"
+            f"  ✓ style {style} / stab {stab} — {len(files)} takes"
+            + (f", median TTFB {med:.0f}ms" if med else "")
         )
 
     if not rows:
@@ -585,11 +802,15 @@ def cmd_style(args):
             if r["ttfb"]
             else ""
         )
-        + f'</div><audio controls preload="none" src="{r["file"]}"></audio></div>'
+        + "</div>"
+        + "".join(
+            f'<audio controls preload="none" src="{f}"></audio>' for f in r.get("files", [r["file"]])
+        )
+        + "</div>"
         for r in rows
     )
     html = f"""<!doctype html>
-<html lang="uk"><head><meta charset="utf-8"><title>style — expression vs latency</title>
+<html lang="en"><head><meta charset="utf-8"><title>style — expression vs latency</title>
 <style>
   body {{ font:15px/1.5 -apple-system, system-ui, sans-serif; background:#0f1115; color:#e7e9ee;
          margin:0; padding:32px; max-width:760px; }}
@@ -603,7 +824,10 @@ def cmd_style(args):
   audio {{ width:100%; height:34px; }}
 </style></head><body>
 <h1>style — expression vs latency</h1>
-<div class="sub">{target['name']} · stability {args.stability} · {args.model}</div>
+<div class="sub">{target['name']} · {args.model} · speed {args.speed} · {args.takes} takes per setting</div>
+<div class="txt" style="border-color:#3a3050">Several takes of the SAME setting on purpose: stability
+IS the randomness between generations, so the spread is the thing being set. Judge a setting by its
+WORST take, not its best.</div>
 <div class="txt">{text.replace("<", "&lt;")}</div>
 {cards}</body></html>"""
     (OUT_DIR / "style.html").write_text(html, encoding="utf-8")
@@ -623,11 +847,7 @@ def cmd_words(args):
     """
     check_key()
     state = _load_state()
-    target = next(
-        (i for i in state["added"].values() if args.only.lower() in i["name"].lower()), None
-    )
-    if not target:
-        sys.exit(f'Voice "{args.only}" is not in the collection')
+    target = _pick_voice(args.only, state)
     OUT_DIR.mkdir(exist_ok=True)
 
     base = PAUSE_TEXTS["break"]
@@ -682,11 +902,7 @@ def cmd_pause(args):
     """Comparing the ways of controlling rhythm on a single voice."""
     check_key()
     state = _load_state()
-    target = next(
-        (i for i in state["added"].values() if args.only.lower() in i["name"].lower()), None
-    )
-    if not target:
-        sys.exit(f'Voice "{args.only}" is not in the collection')
+    target = _pick_voice(args.only, state)
     OUT_DIR.mkdir(exist_ok=True)
 
     rows = []
@@ -722,7 +938,7 @@ def cmd_pause(args):
   audio {{ width:100%; height:34px; }}
 </style></head><body>
 <h1>Pauses — comparison</h1>
-<div class="sub">{target['name']} · stability {args.stability} · {args.model}</div>
+<div class="sub">{target['name']} · {args.model} · speed {args.speed}</div>
 {cards}</body></html>"""
     (OUT_DIR / "pause.html").write_text(html, encoding="utf-8")
     print(f"\nDone → {OUT_DIR / 'pause.html'}")
@@ -933,6 +1149,11 @@ def cmd_cleanup(args):
 
 def main():
     p = argparse.ArgumentParser(description="Voice selection lab (ElevenLabs)")
+    p.add_argument(
+        "--lang",
+        default=os.getenv("VOICE_LAB_LANG", "en"),
+        help="which language pack to audition voices for (default: en)",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pl = sub.add_parser("list", help="find candidate voices in the library")
@@ -940,7 +1161,12 @@ def main():
     pl.set_defaults(func=cmd_list)
 
     pb = sub.add_parser("build", help="add, synthesise and build the page")
-    pb.add_argument("--limit", type=int, default=6, help="how many voices (each costs ~360 characters)")
+    pb.add_argument("--limit", type=int, default=6, help="how many library voices (each costs ~360 characters); 0 for none")
+    pb.add_argument(
+        "--also",
+        help="voices already in the account, by id or by part of the name "
+        "(e.g. jessica,bella) — they cost no slot against the plan's voice cap",
+    )
     pb.add_argument("--pick", help="comma-separated numbers from `list`, e.g. 1,5,7,8,10,13")
     pb.add_argument("--model", default=DEFAULT_MODEL)
     pb.add_argument("--speed", type=float, default=DEFAULT_SPEED)
@@ -959,6 +1185,13 @@ def main():
     py.add_argument("--model", default=DEFAULT_MODEL)
     py.add_argument("--speed", type=float, default=DEFAULT_SPEED)
     py.add_argument("--breaks", action="store_true", help="use the text with break tags instead of the lively one")
+    py.add_argument(
+        "--takes",
+        type=int,
+        default=3,
+        help="how many generations per setting — stability IS the variation between "
+        "them, so one clip cannot show what you are setting (default 3)",
+    )
     py.set_defaults(func=cmd_style)
 
     pw = sub.add_parser("words", help="diagnose broken words: breaks / apostrophe / stability / model")
@@ -991,6 +1224,21 @@ def main():
     pa.add_argument("--speed", type=float, default=DEFAULT_SPEED)
     pa.set_defaults(func=cmd_accent)
 
+    pm = sub.add_parser("models", help="one voice, one line, several synthesis models")
+    pm.add_argument("--only", required=True, help="part of the voice name, or its id")
+    pm.add_argument(
+        "--models",
+        default="eleven_flash_v2_5,eleven_turbo_v2_5,eleven_multilingual_v2,eleven_v3",
+        help="comma-separated model ids to compare",
+    )
+    pm.add_argument("--speed", type=float, default=DEFAULT_SPEED)
+    pm.add_argument(
+        "--breaks",
+        action="store_true",
+        help="include a pause tag, to see whether the model honours it or reads it aloud",
+    )
+    pm.set_defaults(func=cmd_models)
+
     ps = sub.add_parser("serve", help="serve the comparison page")
     ps.add_argument("--port", type=int, default=8080)
     ps.set_defaults(func=cmd_serve)
@@ -1000,6 +1248,9 @@ def main():
     pc.set_defaults(func=cmd_cleanup)
 
     args = p.parse_args()
+    # Before anything else: every command below reads SAMPLES or BASELINE, and
+    # both are empty until a language is chosen.
+    _use_language(args.lang)
     args.func(args)
 
 

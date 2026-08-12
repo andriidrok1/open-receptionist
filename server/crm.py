@@ -35,6 +35,7 @@ from pathlib import Path
 
 from zoneinfo import ZoneInfo
 
+from address import check_address, in_service_area
 from business import BUSINESS, CLI_CRM_DB, L, slot_grid
 
 BIZ = BUSINESS
@@ -124,11 +125,73 @@ def validate_phone(raw: str | None) -> tuple[str | None, str | None]:
         digits = phonenumbers.national_significant_number(number)
         return None, _err("phone.wrong_digits", count=len(digits))
 
+    # The example number out of the agent's own instructions. Found by the
+    # adversarial caller: never asked for a number, it booked with the one
+    # written in its own phone-reading example — a booking the business can never
+    # call back on, and indistinguishable from a real one in the database. The
+    # same trap as the placeholder NAMES below, and the same answer: it is
+    # detectable, so it is detected here instead of being asked for in the prompt.
+    #
+    # Compared AFTER parsing, on the national part: the first version compared
+    # raw digits and let "+14155550132" through, because a country code makes it
+    # a different string and exactly the same phone call.
+    if phonenumbers.national_significant_number(number) in _PLACEHOLDER_PHONES:
+        return None, _err("phone.missing")
+
     return phonenumbers.format_number(number, PhoneNumberFormat.E164), None
 
 
 #: Words the model plugs into the mandatory name field when it never asked.
 _PLACEHOLDER_NAMES = {w.lower() for w in L.raw("placeholder_names")}
+#: Numbers that only ever appear as examples in the prompt. Digits only, so the
+#: comparison does not depend on how the model chose to punctuate them.
+_PLACEHOLDER_PHONES = {re.sub(r"\D", "", p) for p in L.raw("placeholder_phones", ())}
+
+
+def _verify_addresses(details: dict) -> tuple[dict, str | None]:
+    """Look up every intake field declared as an address; repair or refuse.
+
+    Runs after the "is it filled in" check and before availability, because both
+    of its failure modes are cheaper to hit here: a nonexistent address should
+    never reach the point of holding a slot, and an address outside the service
+    area should be refused while the caller is still on the line and can be told
+    who does cover them.
+
+    Three outcomes, and the middle one is the reason this is code and not a
+    prompt instruction:
+
+      verified   → the canonical spelling replaces what was heard. "1200 Urving
+                   Street" becomes "1200 IRVING ST, SAN FRANCISCO, CA, 94122",
+                   which is what the plumber actually reads.
+      no match   → refuse, and say the address back so the caller can correct it.
+      unreachable→ accept as spoken. The service being down must not stop a 24/7
+                   dispatch from taking work; see address.py.
+    """
+    out = dict(details)
+    for f in BOOK.intake:
+        if f.validate != "address":
+            continue
+        raw = str(out.get(f.key) or "").strip()
+        if not raw:
+            continue
+        # The service area doubles as lookup hints: a street with no city is
+        # retried against each covered city before it is refused.
+        check = check_address(raw, BIZ.country, hints=tuple(BOOK.service_area))
+        if not check.reachable:
+            continue  # no opinion available — take it as spoken
+        if not check.verified:
+            return out, _err("address.not_found", address=raw)
+        if not in_service_area(check, BOOK.service_area):
+            return out, _err(
+                "address.out_of_area",
+                # The gazetteer returns "OAKLAND"; the model is told to say the
+                # error out loud verbatim, and all caps reaches the synthesiser
+                # as shouting or spelling. Title-case before it can be spoken.
+                city=(check.city or raw).title(),
+                area=", ".join(BOOK.service_area),
+            )
+        out[f.key] = check.best
+    return out, None
 
 
 def validate_name(raw: str | None) -> tuple[str | None, str | None]:
@@ -404,6 +467,9 @@ def free_slots(
 # ------------------------------ availability ------------------------------
 
 _MONTHS = tuple(L.raw("numbers.months"))
+#: Monday first, the order date.weekday() indexes. A pack that reorders these is
+#: caught by tests/test_locale.py before it can mislabel anything.
+_WEEKDAYS = tuple(L.raw("calendar.weekdays"))
 #: Forms of the billing unit, in the order the plural rule expects.
 _UNIT_FORMS = {k: tuple(v) for k, v in L.raw("numbers.units").items()}
 _PLURAL_RULE = L.text("numbers.plural_rule")
@@ -457,8 +523,18 @@ def _spoken(label: str, starts_at: str, ends_at: str, units: int, price: int) ->
 
     money = L.text("spoken.money", price=price, currency=BIZ.currency)
     if BOOK.is_slots:
+        # The weekday comes from the date, here, in code. Listing the fortnight
+        # in the prompt made this rarer and did not end it: asked for "Thursday"
+        # the agent picked a Tuesday and called it Thursday, with the correct
+        # calendar sitting in front of it. Nothing downstream can catch that —
+        # the date is real and the slot is free — so the only fix is for the
+        # weekday to arrive as a fact rather than be recalled.
         return L.text(
-            "spoken.slot", label=label, date=dm(starts_at), time=L.time(starts_at[11:16]),
+            "spoken.slot",
+            label=label,
+            weekday=_WEEKDAYS[date.fromisoformat(starts_at[:10]).weekday()],
+            date=dm(starts_at),
+            time=L.time(starts_at[11:16]),
             money=money,
         )
     return L.text(
@@ -561,7 +637,6 @@ def check_availability(
     if left > 0:
         out["spoken"] = _spoken(res.label, starts_at, ends_at, units, out["total_price"])
     if BOOK.is_slots:
-        wanted = datetime.strptime(starts_at, _ISO_MIN)
         out["duration_min"] = res.duration_min
         if left <= 0:
             # Taken — offer a replacement immediately, the same way an error
@@ -618,6 +693,10 @@ def create_booking(
     missing = [f.label for f in BOOK.intake if f.required and not details.get(f.key)]
     if missing:
         return {"success": False, "error": _err("intake_missing", fields=", ".join(missing))}
+
+    details, details_error = _verify_addresses(details)
+    if details_error:
+        return {"success": False, "error": details_error}
 
     avail = check_availability(resource, start, end, party_size)
     if avail.get("error"):

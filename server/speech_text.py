@@ -45,8 +45,22 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-MAX_BREAKS = 2  # any more and the speech starts to race
+MAX_BREAKS = 3  # any more and the speech starts to race
 MAX_BREAK_SEC = 0.6
+
+#: How long a pause after a piece of key information. Long enough to be heard as
+#: a beat, short enough not to read as the agent having finished. Well inside
+#: ElevenLabs' 3s ceiling and inside MAX_BREAK_SEC, so the sanitiser leaves it
+#: alone.
+KEY_PAUSE_SEC = 0.4
+
+#: A run of number words shorter than this gets no pause. "One moment" and "just
+#: a second" are not information; "twelve PM" and "eighty dollars" are. Two is
+#: the smallest threshold that tells them apart.
+MIN_KEY_RUN = 2
+
+_WORD_RE = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*|\d+", re.UNICODE)
+_CLAUSE_END_RE = re.compile(r"[.,;:!?…]")
 
 # The model writes the tag however it likes: without the self-closing slash, in
 # single quotes, with a different attribute. A narrow pattern only matched the
@@ -78,20 +92,114 @@ def sanitize_breaks(text: str) -> str:
     return _ANY_TAG_RE.sub(lambda m: m.group(0) if m.group(0).startswith("<break ") else " ", text)
 
 
+def add_key_pauses(text: str, number_words: set[str], glue_words: set[str]) -> str:
+    """Put a beat after each date, time, price or spelled-out number.
+
+    A caller cannot rewind. "So that's a cleaning on Friday August fourteenth at
+    twelve PM a hundred and eighty dollars does that sound right" arrives as one
+    unbroken stream, and by the price they have lost the date. Punctuation alone
+    does not fix it: a comma is a very short pause, and the model does not always
+    write one where the information ends.
+
+    The unit found here is a RUN of number words — "fourteenth at twelve PM" —
+    not a single word, because a lone number is usually prose ("one moment").
+    Glue words count only inside a run, never at its edges, so "at the desk"
+    cannot start one.
+
+    Deliberately deterministic rather than asked of the model. The prompt has
+    requested break tags at key moments all along and the model obliges perhaps
+    half the time — and "half the time" is indistinguishable from random to
+    whoever is listening.
+
+    Nothing is inserted at the very end of the reply (silence follows anyway),
+    next to a pause the model already wrote, or once the budget is used up.
+    """
+    if not number_words:
+        return text
+
+    runs, start, last_number, prev_end = [], None, None, 0
+    for m in _WORD_RE.finditer(text):
+        word = m.group(0).lower().replace("’", "'")
+        # Punctuation ends a run even when number words continue after it. Without
+        # this, "August fourteenth at twelve PM, a hundred and eighty dollars"
+        # is one run bridged by "at" and "a", and the date and the price share a
+        # single pause at the end — which is the one place neither of them needs
+        # it. A comma counts: in a spoken recap it IS the boundary between one
+        # fact and the next.
+        if start is not None and _CLAUSE_END_RE.search(text[prev_end:m.start()]):
+            runs.append((start, last_number.end()))
+            start, last_number = None, None
+        prev_end = m.end()
+
+        if word in number_words:
+            if start is None:
+                start = m.start()
+            last_number = m
+        elif word in glue_words and start is not None:
+            continue  # may sit inside a run; the run still ends on the last number
+        else:
+            if start is not None and last_number is not None:
+                runs.append((start, last_number.end()))
+            start, last_number = None, None
+    if start is not None and last_number is not None:
+        runs.append((start, last_number.end()))
+
+    # Only runs of real substance, and counted in words rather than characters.
+    runs = [(a, b) for a, b in runs if len(_WORD_RE.findall(text[a:b])) >= MIN_KEY_RUN]
+    if not runs:
+        return text
+
+    budget = MAX_BREAKS - len(_BREAK_RE.findall(text))
+    if budget <= 0:
+        return text
+
+    out, cursor, used = [], 0, 0
+    for _, end in runs:
+        if used >= budget:
+            break
+        # Step over the punctuation that closes the phrase, so the pause lands
+        # after "…eighty dollars." rather than inside it.
+        tail = end
+        while tail < len(text) and text[tail] in ".,;:!?—–-":
+            tail += 1
+        rest = text[tail:]
+        if not rest.strip():
+            break  # end of the reply; the silence after it is the pause
+        if rest.lstrip().startswith("<break"):
+            continue  # the model already put one here
+        out.append(text[cursor:tail])
+        out.append(f'<break time="{KEY_PAUSE_SEC}s" />')
+        cursor = tail
+        used += 1
+    out.append(text[cursor:])
+    return "".join(out)
+
+
 class SpeechTextFilter:
     """Text filter applied before TTS. Implements pipecat's BaseTextFilter.
 
     The interface is implemented structurally rather than by inheritance, so the
     module stays importable and testable on its own, without the pipeline.
 
-    Language-agnostic: it only deals with pause markup, not with words.
+    The word lists are passed IN rather than read from a language pack here, so
+    this module still knows nothing about locales and stays testable with three
+    words and no YAML. Given none, it only sanitises and inserts nothing.
     """
 
+    def __init__(self, number_words=(), glue_words=()):
+        self._numbers = {w.lower() for w in number_words}
+        self._glue = {w.lower() for w in glue_words}
+
     def prepare(self, text: str) -> str:
-        """All processing in one call — convenient to test without a pipeline."""
+        """All processing in one call — convenient to test without a pipeline.
+
+        Order matters: pauses are added first and sanitised after, so our own
+        insertions are subject to the same budget and clamp as the model's. The
+        other way round, the count could be exceeded by exactly the tags we add.
+        """
         if not text or not text.strip():
             return text
-        return sanitize_breaks(text)
+        return sanitize_breaks(add_key_pauses(text, self._numbers, self._glue))
 
     # --- pipecat BaseTextFilter interface ---
 
@@ -139,10 +247,13 @@ class WholeReplyAggregator(FrameProcessor):
     Place between the LLM and TTS.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, number_words=(), glue_words=(), **kwargs):
         super().__init__(**kwargs)
         self._parts: list[str] = []
         self._collecting = False
+        # Same filter the sentence-by-sentence path uses, so both routes through
+        # the pipeline produce identical text.
+        self._filter = SpeechTextFilter(number_words, glue_words)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -151,7 +262,7 @@ class WholeReplyAggregator(FrameProcessor):
             self._parts, self._collecting = [], True
             await self.push_frame(frame, direction)
         elif isinstance(frame, LLMFullResponseEndFrame):
-            text = sanitize_breaks("".join(self._parts)).strip()
+            text = self._filter.prepare("".join(self._parts)).strip()
             self._parts, self._collecting = [], False
             if text:
                 await self.push_frame(

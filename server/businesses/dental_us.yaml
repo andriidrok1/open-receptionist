@@ -12,9 +12,11 @@ key: dental_us
 language: en
 country: US
 tz: America/Los_Angeles
-# Rachel, a premade ElevenLabs voice. A placeholder: the Ukrainian voice was
-# chosen by ear through voice_lab.py and this one has not been yet.
-voice_id: 21m00Tcm4TlvDq8ikWAM
+# No voice_id: this practice takes the English pack's default (Eryn), which is
+# the one chosen by ear. A business only names a voice when it wants a DIFFERENT
+# one from its language's — pinning the default here meant that improving the
+# language's voice silently left this business behind, which is exactly what
+# happened while Rachel sat in this line.
 
 name: Bright Smile Dental
 brand: Bright Smile Dental

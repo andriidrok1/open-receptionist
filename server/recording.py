@@ -32,6 +32,9 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+import guards
+from business import L
+
 
 class CallRecorder:
     """Collects one call's transcript and, optionally, its audio.
@@ -110,6 +113,7 @@ class TranscriptCollector(FrameProcessor):
         super().__init__(**kwargs)
         self._recorder = recorder
         self._side = side
+        self._digit_words = dict(L.raw("speech.digit_words", {})) if side == "caller" else {}
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -119,6 +123,11 @@ class TranscriptCollector(FrameProcessor):
                 # Final transcripts only: interim ones are guesses, and Scribe
                 # emits them even on silence.
                 self._recorder.add("caller", frame.text)
+                # The same text feeds the guards' ledger of what was actually
+                # said. It goes here rather than in bot.py because this is the
+                # one place a final caller transcript is guaranteed to pass —
+                # the aggregator below consumes the frame.
+                guards.hear(frame.text, self._digit_words)
         elif isinstance(frame, AggregatedTextFrame) and not isinstance(frame, TTSTextFrame):
             self._recorder.add("agent", frame.text)
 

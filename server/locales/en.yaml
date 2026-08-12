@@ -27,9 +27,15 @@ settings:
   default_tz: America/Los_Angeles
   # BCP-47 tag handed to speech recognition and synthesis.
   speech_language: en
-  # Default voice. Rachel, a premade ElevenLabs voice — a placeholder until one
-  # is chosen by ear the way the Ukrainian one was (see voice_lab.py).
-  default_voice_id: 21m00Tcm4TlvDq8ikWAM
+  # Default voice: "Eryn — Friendly, AI Assistant, Customer Service", from the
+  # ElevenLabs library. Chosen by ear against nine others reading the same two
+  # lines (see voice_lab.py), at the settings a real call uses.
+  #
+  # It replaced Rachel, the oldest premade voice in the catalogue, which sounded
+  # like one — that was a placeholder nobody had got round to replacing. Eryn is
+  # the only candidate whose donor recorded it FOR service calls rather than for
+  # narration, which is audible: it asks questions rather than announcing them.
+  default_voice_id: DXFkLCBUTmvXpp2QwZjA
 
 calendar:
   weekdays: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
@@ -51,11 +57,23 @@ spoken:
   money: "{currency}{price}"
   date: "{month} {day}"
   datetime: "{date} at {time}"
-  slot: "{label}, {date} at {time}, {money}"
+  # The weekday is part of the sentence because it comes from the database
+  # rather than from the model's memory of what day it is. Saying "Thursday"
+  # over a Tuesday is the one date error nothing downstream can catch.
+  slot: "{label}, {weekday} {date} at {time}, {money}"
   nights: "{label}, check in {start}, check out {end}, {units} {unit} — {money}"
 
 placeholder_names: [guest, client, customer, patient, caller, unknown,
                     "not given", anonymous, "n/a", "-"]
+
+# Numbers that appear as EXAMPLES anywhere in this pack. The agent took one of
+# them straight out of its own instructions and booked with it, having never
+# asked the caller for a number at all — the prompt says in as many words that
+# examples are not facts, and that was not enough. Blocked in code instead.
+#
+# A test asserts that every number written into prompt.phone_rules appears here,
+# so a new example cannot be added without also being blocked.
+placeholder_phones: ["4155550132"]
 
 prompt:
   identity: |-
@@ -120,14 +138,33 @@ prompt:
     yourself; what matters is that the {customer_nom} can recognise their own
     number by ear. Ask whether you got it right and wait for the answer.
     Pass the number to the tool AS DIGITS (4155550132), never as words.
+    {phone_digits}
     If a tool says the number has the wrong number of digits, don't argue and
     don't guess — ask for it again.
 
+  # Filled in only when libphonenumber knows the country. Count BEFORE the
+  # recap: a caller who has already agreed to a summary containing a broken
+  # number has to sit through the whole thing a second time.
+  phone_digits: |-
+    A local number here ({country}) has {n} digits, not counting the country
+    code. COUNT what you wrote down, and if it comes to anything other than {n},
+    ask for the number again THEN AND THERE — before you read the booking back.
+    Never pad it, never drop a digit to make it fit.
+
   date_hint: |-
     Today is {today}, {weekday}, and it's {time} right now.
+    The calendar for the next two weeks, first line today:
+    {calendar}
     When the {customer_nom} gives a date or time out loud
-    ("September fourteenth", "next Tuesday", "sometime after lunch"), convert it
-    yourself into YYYY-MM-DD{slots_suffix}. If no year is mentioned, take the next one coming up.
+    ("September fourteenth", "next Tuesday", "sometime after lunch"), turn it into
+    YYYY-MM-DD{slots_suffix}. Never work a weekday out by counting — READ IT OFF
+    the list above. Saying "Monday" and booking a Friday is worse than any delay,
+    because the date you booked is a real open slot and nothing downstream can
+    tell it was the wrong one. If they name a day beyond this list, or a date
+    with no year, take the next such day coming up.
+    When a tool answers, its "spoken" field already contains the weekday for the
+    date it used. Read the weekday FROM THERE. Yours is a memory; that one is
+    read off the booking.
 
   date_hint_slots_suffix: " and HH:MM"
 
@@ -254,7 +291,32 @@ tools:
     Create the {action} in the business's system. Call this ONLY after you have
     read all the details back out loud and the {customer_nom} has explicitly
     agreed.
-  ref_code_arg: The booking reference the caller gave (e.g. APT-1234)
+  # What the agent says into a silence, and then on the way out. Short on
+  # purpose: someone who stepped away needs a nudge, not a speech.
+  idle_check: Are you still there?
+  idle_goodbye: I'll let you go for now. Call back any time — bye!
+
+  # Spoken INSTEAD of a reply that confirmed a booking nobody made. The agent
+  # has been caught saying "your appointment is set, your reference is APT-5678"
+  # without ever calling the tool — the caller hangs up satisfied and no plumber
+  # is coming. There is nothing to correct in a sentence like that, so it is
+  # replaced wholesale. Deliberately mundane: a caller forgives a hold-on, and
+  # would not forgive finding out later.
+  claim_retracted: >-
+    Sorry — hold on. I don't have that booked yet. Let me put it in properly now.
+
+  end_call: >-
+    Hang up. Call this when the conversation is genuinely over — after the
+    caller has said goodbye, or once you have confirmed a booking and they have
+    nothing further. Say your goodbye in the SAME reply; the line stays open
+    until you finish speaking. Never call it while a question of yours is
+    unanswered, and never instead of answering one.
+  # The prefix comes from the business, not from here. It used to be a literal
+  # APT- — the dental practice's — shown to the model on every call whatever the
+  # business was, and the model duly read out "APT-5678" on an emergency plumbing
+  # line where every real code begins JOB-. Third time an example in the
+  # instructions has been taken for a fact; see placeholder_phones for the second.
+  ref_code_arg: "The booking reference the caller gave (e.g. {ref_prefix}1234)"
   find_booking: >-
     Find upcoming bookings by phone number. Call this when the caller wants to
     cancel or move something but does not remember the reference.
@@ -272,6 +334,12 @@ tools:
 errors:
   phone:
     missing: no phone number was given
+    # Read by the model after it has tried to book with a number nobody said.
+    # Worded as an instruction, not a complaint, because the failure it follows
+    # is the agent guessing at digits until one passes validation.
+    not_spoken: >-
+      that number never came from the caller — don't guess at the digits, ask
+      them to read it out again
     no_digits: there are no digits in that number — ask for it in digits, not words
     too_short: >-
       that number is too short — ask for it again and read it back in groups of
@@ -315,6 +383,13 @@ errors:
   resource_unknown: "unknown option {resource}; we have: {known}"
   party_too_large: the maximum is {max} per booking
   intake_missing: "missing details: {fields}"
+  # Said out loud, so it repeats the address back: the caller cannot correct a
+  # street name they never heard the agent get wrong.
+  address:
+    not_found: >-
+      I couldn't find "{address}" on the map. Read the street name and number
+      back to me, and the city.
+    out_of_area: "{city} is outside the area we cover. We only go to: {area}."
   no_space: there's nothing free at that time
   message_no_topic: the question itself wasn't given
   nothing_booked: >-
@@ -434,3 +509,142 @@ turn_taking:
                   "we're", "there's", "let's", "one", "two", "three",
                   "street", "avenue", "apartment", "number"]
   sentence_end: ".!?…"
+
+# Choosing a voice by ear (voice_lab.py). Optional — a development tool, not
+# something a call needs, so it stays out of the pack contract and a new
+# language pack is not obliged to fill it in.
+voice_lab:
+  # What to ask the ElevenLabs library for: their own language filter, plus
+  # search words for voices that are tagged loosely.
+  search_language: en
+  search_terms: [american, receptionist, customer service]
+  # Every candidate reads THESE TWO LINES and nothing else, which is what makes
+  # the comparison fair. The second is deliberately stuffed with a date, a time,
+  # a price and a phone number — the hardest things for a synthesiser and the
+  # ones this agent says on every single call.
+  samples:
+    greeting: "Hi, this is Emma at Bright Smile Dental. How can I help you today?"
+    booking: "So that's a cleaning on Friday, August fourteenth at twelve PM, a hundred and eighty dollars. Your number is four one five, three two one, one two three five. Does that sound right?"
+
+# The showcase page (static/demo.html). Separate from `dashboard:` because the
+# two have different readers: the dashboard is for whoever runs the business,
+# this is for a visitor deciding whether the thing works at all.
+#
+# What this section does NOT cover: the business cards themselves. A Ukrainian
+# clinic keeps its Ukrainian name, prices and opening hours whatever the page
+# language is set to — those come from its own config, and translating them
+# would be inventing a business that does not exist.
+demo:
+  language_name: English
+  title: Voice receptionist — demo
+  logo: Voice receptionist
+  badge: demo · no real bookings are made
+  lede: >-
+    Pick your industry and call, exactly the way your customer would.
+    Voice, in the browser, nothing to install.
+  language_label: Language
+  # The number beside each option is the measured wait before the first
+  # sound, which is the only reason the choice exists.
+  voice_model_label: Voice model
+
+  call: Call
+  call_again: Call again
+  hang_up: Hang up
+  connecting: Connecting…
+  hint_cancel: press again to cancel
+  go_ahead: Go ahead
+  hint_hang_up: press again to hang up
+  listening: Listening
+  hint_speak_normally: speak in your normal voice
+  thinking: One moment…
+  hint_a_second: just a second
+  speaking: "{agent} is speaking"
+  hint_interrupt: interrupt whenever you like
+  answers_in: "{agent} answers in {language}"
+  # Quotation marks differ by language, and the wrong ones are one of the
+  # tells that a page was translated rather than written.
+  quote_open: "“"
+  quote_close: "”"
+
+  section_prices: "Prices {agent} knows"
+  section_asks: Will also ask
+  section_try: Try saying
+  section_talk: Conversation
+  section_result: What the front desk sees
+
+  actions:
+    check_availability: checked what was free
+    create_booking: created the record
+    take_message: logged a callback request
+
+  record_new: "New {action}"
+  record_message: Callback request
+  row_customer: Customer
+  row_where: Where
+  row_what: What
+  row_when: When
+  row_total: Total
+  row_details: Details
+  row_question: Question
+  today: today
+
+  result_looking: Checking what appeared in the system…
+  result_empty: >-
+    Nothing was recorded for this call — try taking the conversation
+    through to a booking.
+
+  timer_ends_in: "the demo call ends in {n}s"
+  limit_reached: "Demo calls are capped at {n} min — press to call again."
+
+  err_industries: Could not load the list of industries.
+  err_none_configured: No industries are configured.
+  err_bot_down: "The bot for this industry is not answering (port {port})."
+  err_connect: >-
+    Could not connect to the bot (port {port}). Check your connection,
+    and that run_demo.py is running.
+  err_https: >-
+    The microphone only works over https, or from localhost.
+    Open the demo over a secure link.
+  err_mic: >-
+    The browser did not grant microphone access — the bot cannot hear you.
+    Allow the microphone in the site settings and call again.
+  err_audio_blocked: The browser blocked the sound. Press “Enable sound”.
+  enable_sound: Enable sound
+
+# Words that make up spoken numbers, dates, times and money. Used to find where
+# a pause helps: the agent says a date, a price and a phone number on almost
+# every call, and those are the moments a caller needs a beat to take in.
+#
+# Digits are useless for this — the prompt tells the model to say numbers the way
+# a person does, so "180" reaches synthesis as "a hundred and eighty dollars".
+# Month and weekday names are NOT repeated here; they are read from `calendar`
+# and `numbers`, so there is one place to correct them.
+speech:
+  # Digits as they are said out loud. Used to check that a phone number the
+  # agent is about to book with actually came from the caller: speech
+  # recognition writes "four one five" as often as "415", and the two have to
+  # collapse to the same thing before they can be compared.
+  digit_words: {zero: "0", oh: "0", one: "1", two: "2", three: "3", four: "4",
+                five: "5", six: "6", seven: "7", eight: "8", nine: "9"}
+  # How the agent signs off. Matched against the LAST sentence of a reply, and
+  # when it matches the line is hung up from code — ending the call is a tool
+  # the model has and does not reliably reach for, and on a phone line the
+  # result is a bill that runs until the caller works out they should hang up.
+  # "goodnight" earned its place from a transcript: the agent said "You're
+  # welcome. Goodnight!" — a perfect place to hang up — and then traded twelve
+  # more goodbyes because the word was not on this list.
+  goodbye_words: [bye, goodbye, "take care", "have a good one", "see you",
+                  goodnight, "good night"]
+  # Counted as part of a run only BETWEEN other number words, never at its edges
+  # — otherwise an ordinary "at the desk" would look like the start of a time.
+  glue_words: [and, at, past, to, a, the, of, "on"]
+  number_words: [zero, oh, one, two, three, four, five, six, seven, eight, nine,
+                 ten, eleven, twelve, thirteen, fourteen, fifteen, sixteen,
+                 seventeen, eighteen, nineteen, twenty, thirty, forty, fifty,
+                 sixty, seventy, eighty, ninety, hundred, thousand,
+                 first, second, third, fourth, fifth, sixth, seventh, eighth,
+                 ninth, tenth, eleventh, twelfth, thirteenth, fourteenth,
+                 fifteenth, sixteenth, seventeenth, eighteenth, nineteenth,
+                 twentieth, thirtieth,
+                 "am", "pm", "o'clock", noon, midnight, half, quarter,
+                 dollar, dollars, cent, cents, euro, euros, pound, pounds]

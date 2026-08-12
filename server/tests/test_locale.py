@@ -4,6 +4,7 @@ These tests are the reason "adding a language is one file" is a claim and not a
 hope. They run without a network or an API key, so they can gate every commit.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -71,14 +72,15 @@ def test_reference_pack_uses_only_names_the_code_passes(lang=REFERENCE):
     known = {
         "agent_name", "persona", "name", "speech_bad", "speech_good", "tone",
         "customer_gen", "customer_nom", "customer_nom_cap", "customer_dat",
-        "today", "weekday", "time", "slots_suffix", "knowledge", "scope",
+        "today", "weekday", "time", "calendar", "slots_suffix", "knowledge", "scope",
+        "phone_digits", "country",
         "escalation_examples", "resource_label", "start_label", "end_label",
         "party", "party_label", "unit_cap", "action_upper", "collect",
         "intake_rules", "phone_rules", "recap", "count", "unit", "max", "days",
         "now", "hours", "opens", "closes", "duration", "resource", "known",
         "fields", "price", "currency", "day", "month", "label", "date",
         "start", "end", "units", "money", "action", "topic", "n", "changes",
-        "ref_code",
+        "ref_code", "address", "area", "city", "ref_prefix",
     }
     pack = load_locale(lang)
     unknown = {k: _placeholders(pack, k) - known for k in REQUIRED_KEYS
@@ -158,6 +160,32 @@ def test_calendar_shapes(lang):
     assert len(pack.raw("calendar.weekdays_short")) == 7
     assert len(pack.raw("numbers.months")) == 12
     assert pack.raw("numbers.plural_rule") in ("slavic", "english")
+
+
+#: The word each pack uses for Monday. `date.weekday()` is 0 for Monday and the
+#: prompt's calendar indexes `calendar.weekdays` with it directly, so a pack
+#: that starts its week on Sunday — the ordinary convention in American
+#: calendars, and therefore an easy thing for a contributor to "fix" — labels
+#: every date in the prompt with the wrong day. The agent then books the wrong
+#: one while sounding completely sure, and nothing downstream can tell: only the
+#: date reaches the tools, and it is a real, open slot.
+#:
+#: This cannot be checked without knowing the language, which is why a new pack
+#: has to add its word here. That is the point: one line, and the failure mode
+#: above is impossible.
+MONDAY_IN = {"en": "monday", "uk": "понеділок"}
+
+
+@pytest.mark.parametrize("lang", ALL_LANGUAGES)
+def test_weekday_names_are_listed_monday_first(lang):
+    pack = load_locale(lang)
+    names = pack.raw("calendar.weekdays")
+    assert len(set(names)) == 7, "the seven weekday names are not distinct"
+    assert lang in MONDAY_IN, (
+        f"add the {lang} word for Monday to MONDAY_IN in this test — without it "
+        "nothing checks that the pack's week starts where the code assumes"
+    )
+    assert names[0].strip().lower() == MONDAY_IN[lang]
 
 
 @pytest.mark.parametrize("lang", ALL_LANGUAGES)
@@ -254,3 +282,64 @@ def test_turn_taking_classifier(lang):
     assert classify_ending("something complete.", words, end) == "finished"
     assert classify_ending("something ambiguous", words, end) == "unsure"
     assert classify_ending("", words, end) == "unsure"
+
+
+#: Something shaped like a booking reference: a short run of letters, a dash,
+#: some digits. Unicode letters, because a Ukrainian pack writes БР- and an
+#: English one writes JOB-.
+REF_SHAPED = re.compile(r"\b[^\W\d_]{2,4}-\d{3,6}\b")
+
+
+@pytest.mark.parametrize("lang", ALL_LANGUAGES)
+def test_no_pack_text_hardcodes_a_reference_code(lang):
+    """A reference code written into the pack is read out as if it were real.
+
+    The third instance of one failure. `tools.ref_code_arg` said "(e.g.
+    APT-1234)" — the dental practice's prefix — and the model was shown it on
+    every call of every business. On an emergency plumbing line, where every
+    real code begins JOB-, it duly told a caller their reference was APT-5678,
+    with no booking behind it.
+
+    Before that it was a phone number out of prompt.phone_rules, booked with
+    although the caller never gave one. The pattern is always the same: an
+    example in the instructions is indistinguishable, to the model, from a fact.
+
+    So examples that could pass for data are not allowed to be literal. The
+    prefix is substituted from the business config, and this test makes it
+    impossible to quietly add another.
+    """
+    pack = load_locale(lang)
+    literal = {
+        key: found
+        for key in REQUIRED_KEYS
+        if isinstance(pack.raw(key), str) and (found := REF_SHAPED.findall(pack.raw(key)))
+    }
+    assert not literal, (
+        f"{lang}: reference codes written out literally: {literal}. Use the "
+        "{ref_prefix} placeholder so the example matches the business."
+    )
+
+
+@pytest.mark.parametrize("lang", ALL_LANGUAGES)
+def test_every_example_number_in_the_prompt_is_blocked(lang):
+    """A number written into the prompt as an example must also be refused.
+
+    Found by the adversarial caller: never asked for a phone number at all, the
+    agent booked with the one from its own phone-reading example. The prompt says
+    in as many words that examples are not facts, and that did not hold. So the
+    numbers are refused in code — and this test makes it impossible to add a new
+    example without blocking it, which is the part a person would forget.
+    """
+    pack = load_locale(lang)
+    blocked = {re.sub(r"\D", "", p) for p in pack.raw("placeholder_phones", ())}
+    rules = pack.raw("prompt.phone_rules")
+
+    # Runs of digits long enough to be dialled. Shorter groups are the "read it
+    # in threes" illustrations, not numbers.
+    examples = {d for d in re.findall(r"\d{7,}", rules)}
+    missing = examples - blocked
+    assert not missing, (
+        f"{lang}: {missing} appear as examples in prompt.phone_rules but are not in "
+        "placeholder_phones, so the agent can book with them"
+    )
+    assert blocked, f"{lang} blocks no example numbers at all"

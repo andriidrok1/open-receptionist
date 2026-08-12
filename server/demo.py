@@ -23,20 +23,66 @@ from business import load_business
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from locale_pack import LOCALES_DIR, load_locale
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
 
+#: The page opens in this language whatever the businesses on it are. An
+#: American opening a demo and reading Ukrainian labels around an English
+#: dental practice concludes the project is not for them, and closes the tab.
+DEFAULT_UI_LANGUAGE = os.getenv("DEMO_LANGUAGE", "en")
+
 #: Tab order = the order of this list. The first one opens by default.
 DEMO_BUSINESSES = ["dental_us", "clinic", "emergency", "cleaning", "hotel", "barbershop"]
 
+#: Synthesis models the demo can be called on, first one the default.
+#:
+#: One BOT PROCESS per (business, model) rather than one process told which
+#: model to use per call: the model is read when the process starts, and
+#: threading a per-session override through the transport, the service settings
+#: and the reconnect path is a lot of machinery for a switch that exists to
+#: answer one question by ear. A process costs about 230 MB and three seconds of
+#: startup, which is the cheaper side of that trade by a wide margin.
+#:
+#: `ttfb_ms` is measured, not quoted: median of three runs on the shipping voice
+#: reading the same booking line (voice_lab.py models). It sits next to the name
+#: because the whole point of the switch is hearing what the wait buys.
+TTS_MODELS = [
+    {"id": "eleven_flash_v2_5", "label": "Flash v2.5", "ttfb_ms": 336},
+    {"id": "eleven_multilingual_v2", "label": "Multilingual v2", "ttfb_ms": 1699},
+]
+
 BASE_PORT = int(os.getenv("DEMO_BASE_PORT", "7860"))
+#: Ports for the second model start a block above the first, so a glance at
+#: `ss -tlnp` says which is which.
+MODEL_PORT_STRIDE = int(os.getenv("DEMO_MODEL_PORT_STRIDE", "10"))
 DEMO_PORT = int(os.getenv("DEMO_PORT", "8080"))
 MAX_CALL_SECONDS = int(os.getenv("MAX_CALL_SECONDS", "180"))
 
 
-def bot_port(key: str) -> int:
-    return BASE_PORT + DEMO_BUSINESSES.index(key)
+def bot_port(key: str, model_id: str | None = None) -> int:
+    """Where the bot for this business, on this model, is listening."""
+    model_index = 0
+    if model_id:
+        model_index = next(
+            (i for i, m in enumerate(TTS_MODELS) if m["id"] == model_id), 0
+        )
+    return BASE_PORT + model_index * MODEL_PORT_STRIDE + DEMO_BUSINESSES.index(key)
+
+
+def bot_processes() -> list[tuple[str, str, int]]:
+    """(business, model, port) for every process the demo needs running.
+
+    run_demo.py starts exactly these; the page dials exactly these. One list, so
+    a model added above cannot be offered on the page without a bot behind it.
+    """
+    return [
+        (key, model["id"], bot_port(key, model["id"]))
+        for model in TTS_MODELS
+        for key in DEMO_BUSINESSES
+        if (HERE / "businesses" / f"{key}.yaml").exists()
+    ]
 
 
 def demo_db(key: str) -> Path:
@@ -79,8 +125,21 @@ def _card(key: str) -> dict:
         "action": biz.booking.action,
         "resources": _resource_rows(biz),
         "intake": [f.label for f in biz.booking.intake],
+        # One port per synthesis model. The page picks by the model chosen next
+        # to the call button; `port` is kept as the default so nothing has to
+        # know about models to place a call.
         "port": bot_port(key),
+        "ports": {m["id"]: bot_port(key, m["id"]) for m in TTS_MODELS},
         "max_call_seconds": MAX_CALL_SECONDS,
+        # Which language this agent answers in, named in that language. A
+        # property of the business, not of the page: a visitor reading the page
+        # in English can still call the Ukrainian clinic, and should be told so
+        # before they press the button rather than after.
+        "language_name": (biz.pack.raw("demo", None) or {}).get("language_name", biz.pack.lang),
+        # What the tools did, in words a visitor understands. From the
+        # business's pack, because these lines describe THIS agent's actions and
+        # sit right underneath its replies.
+        "actions": biz.pack.raw("demo.actions", {}),
     }
 
 
@@ -100,6 +159,52 @@ def index() -> str:
 @app.get("/api/businesses")
 def api_businesses() -> JSONResponse:
     return JSONResponse(CARDS)
+
+
+@app.get("/api/tts-models")
+def api_tts_models() -> JSONResponse:
+    """What the call button can be switched between, with measured latency."""
+    return JSONResponse(TTS_MODELS)
+
+
+def _ui_languages() -> list[dict]:
+    """Every pack that can dress the page, by its own name for itself.
+
+    "Українська" rather than "Ukrainian": someone who needs that option is
+    reading in it, and a list of endonyms is scannable to everyone at once.
+    Packs without a `demo:` section are skipped rather than shown broken — the
+    section is optional, since a language pack exists to run a bot and not to
+    translate a showcase.
+    """
+    out = []
+    for path in sorted(LOCALES_DIR.glob("*.yaml")):
+        pack = load_locale(path.stem)
+        name = (pack.raw("demo", None) or {}).get("language_name")
+        if name:
+            out.append({"code": path.stem, "name": name})
+    return out
+
+
+@app.get("/api/ui")
+def api_ui(lang: str = "") -> JSONResponse:
+    """The page's own words, plus which other languages it can be read in.
+
+    Served rather than baked into demo.html so that the strings live in the
+    same packs as everything else the project says out loud — one place to
+    translate, and the page cannot drift out of step with the agent.
+    """
+    languages = _ui_languages()
+    codes = {x["code"] for x in languages}
+    chosen = lang if lang in codes else DEFAULT_UI_LANGUAGE
+    if chosen not in codes:  # no pack translates the page: fall back to any
+        chosen = languages[0]["code"] if languages else DEFAULT_UI_LANGUAGE
+    return JSONResponse(
+        {
+            "lang": chosen,
+            "languages": languages,
+            "strings": load_locale(chosen).raw("demo", {}),
+        }
+    )
 
 
 @app.get("/api/now")

@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-from demo import CARDS, DEMO_PORT, MAX_CALL_SECONDS, demo_db
+from demo import CARDS, DEMO_PORT, MAX_CALL_SECONDS, bot_processes, demo_db
 
 HERE = Path(__file__).parent
 PYTHON = sys.executable
@@ -46,15 +46,24 @@ def prune_old(days: int = 1) -> None:
             pass  # the database has no tables yet — nothing to clean
 
 
-def start_bot(card: dict) -> subprocess.Popen:
+def start_bot(key: str, model_id: str, port: int) -> subprocess.Popen:
+    """One bot process, pinned to a business AND a synthesis model.
+
+    The model is fixed when the process starts, which is why the page switches
+    models by dialling a different port rather than by asking one process to
+    change. The database is shared between the models of one business on
+    purpose: a booking made on one should be visible when calling back on the
+    other.
+    """
     env = {
         **os.environ,
-        "BUSINESS": card["key"],
-        "CRM_DB": str(demo_db(card["key"])),
+        "BUSINESS": key,
+        "CRM_DB": str(demo_db(key)),
         "MAX_CALL_SECONDS": str(MAX_CALL_SECONDS),
+        "ELEVENLABS_TTS_MODEL": model_id,
     }
     return subprocess.Popen(
-        [PYTHON, "bot.py", "--host", "0.0.0.0", "--port", str(card["port"])],
+        [PYTHON, "bot.py", "--host", "0.0.0.0", "--port", str(port)],
         cwd=HERE,
         env=env,
     )
@@ -64,9 +73,9 @@ def main() -> int:
     prune_old()
 
     procs = []
-    for card in CARDS:
-        procs.append(start_bot(card))
-        print(f"  bot {card['key']:11} → :{card['port']}")
+    for key, model_id, port in bot_processes():
+        procs.append(start_bot(key, model_id, port))
+        print(f"  bot {key:11} {model_id:24} → :{port}")
 
     print(f"\n  showcase → http://localhost:{DEMO_PORT}\n  Ctrl+C to stop everything\n")
 

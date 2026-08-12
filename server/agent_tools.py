@@ -23,6 +23,7 @@ import sqlite3
 from loguru import logger as _logger
 
 import crm
+import guards
 
 BIZ = BUSINESS
 BOOK = BUSINESS.booking
@@ -133,7 +134,12 @@ TAKE_MESSAGE_SCHEMA = FunctionSchema(
 )
 
 
-REF_CODE_PROP = {"type": "string", "description": L.text("tools.ref_code_arg")}
+REF_CODE_PROP = {
+    "type": "string",
+    # The business's own prefix, so the example the model is shown matches the
+    # codes it will actually be given.
+    "description": L.text("tools.ref_code_arg", ref_prefix=BOOK.ref_prefix),
+}
 
 FIND_BOOKING_SCHEMA = FunctionSchema(
     name="find_booking",
@@ -157,6 +163,18 @@ RESCHEDULE_BOOKING_SCHEMA = FunctionSchema(
 )
 
 
+#: Ending the call is the model's decision because the model is the only thing
+#: that knows the business is concluded. It takes no arguments: anything it
+#: could carry — a reason, a summary — is already in the transcript, and an
+#: argument is one more thing to get wrong on the last turn of a call.
+END_CALL_SCHEMA = FunctionSchema(
+    name="end_call",
+    description=L.text("tools.end_call"),
+    properties={},
+    required=[],
+)
+
+
 def tools_schema() -> ToolsSchema:
     standard = [TAKE_MESSAGE_SCHEMA]
     if BOOK.enabled:
@@ -168,7 +186,7 @@ def tools_schema() -> ToolsSchema:
             RESCHEDULE_BOOKING_SCHEMA,
             TAKE_MESSAGE_SCHEMA,
         ]
-    return ToolsSchema(standard_tools=standard)
+    return ToolsSchema(standard_tools=standard + [END_CALL_SCHEMA])
 
 
 def _when(args: dict) -> tuple[str, str | None]:
@@ -196,11 +214,22 @@ def call_tool(name: str, args: dict) -> dict:
     event log already swallows its own errors for exactly this reason, and the
     booking path had no such guard.
     """
+    # A phone number the caller never said is refused before it reaches the
+    # store. Found by the casebook: given a number the store rejected, the agent
+    # invented three more and tried each one, rather than asking again. The
+    # prompt forbids exactly this and did not hold, so it is no longer asked
+    # for — a booking cannot be written against digits nobody uttered.
+    if name in ("create_booking", "take_message") and not guards.was_spoken(args.get("phone")):
+        return {"error": L.text("errors.phone.not_spoken")}
     try:
-        return _call_tool(name, args)
+        result = _call_tool(name, args)
     except sqlite3.Error as e:
         _logger.error(f"[tool] {name} failed against the store: {e}")
         return {"error": L.text("errors.storage_unavailable")}
+    # Only a code that was really issued may be spoken; see guards.fabricated_refs.
+    if isinstance(result, dict) and result.get("ref_code"):
+        guards.remember_ref(result["ref_code"])
+    return result
 
 
 def _call_tool(name: str, args: dict) -> dict:
@@ -235,7 +264,7 @@ def _call_tool(name: str, args: dict) -> dict:
     return {"error": L.text("errors.tool_unknown", name=name)}
 
 
-def register(llm, logger=None, recorder=None) -> None:
+def register(llm, logger=None, recorder=None, ender=None) -> None:
     """Bind the handlers to a pipecat LLM service (the live bot's path).
 
     Every call is written to the event log, which the demo page turns into a
@@ -251,6 +280,18 @@ def register(llm, logger=None, recorder=None) -> None:
     def make(name: str):
         async def handler(params):
             args = dict(params.arguments)
+            if name == "end_call":
+                # Not a store operation, so it does not go through call_tool.
+                # The hangup is only REQUESTED here: the goodbye is still being
+                # spoken while this runs, and ending now would cut it off.
+                if ender:
+                    ender.request("the agent said the conversation was over")
+                result = {"success": True}
+                if logger:
+                    logger.info("[tool] end_call — hanging up after this sentence")
+                crm.log_event(name, None)
+                await params.result_callback(result)
+                return
             result = call_tool(name, args)
             if logger:
                 logger.info(f"[tool] {name}({args}) -> {result}")

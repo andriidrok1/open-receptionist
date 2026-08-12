@@ -40,6 +40,7 @@ import crm
 from business import BUSINESS, L, build_system_prompt, greeting_hint
 from call_metrics import CallMetrics, format_report
 from recording import CallRecorder, TranscriptCollector
+from hangup import CallEnder, ClaimGuard, GoodbyeWatch, IdleWatch
 from turn_taking import SemanticSpeechTimeoutStrategy
 from dotenv import load_dotenv
 from loguru import logger
@@ -92,9 +93,13 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
+import tts_settings
 from speech_text import SpeechTextFilter, WholeReplyAggregator
 
-load_dotenv(override=True)
+# Defaults only: an exported variable wins, so a one-off experiment
+# (ELEVENLABS_TTS_MODEL=... python run_demo.py) actually takes effect.
+# See the long note in business.py.
+load_dotenv(override=False)
 
 
 class ServerVADSpeechTimeoutStopStrategy(SpeechTimeoutUserTurnStopStrategy):
@@ -292,6 +297,22 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     # Turn it off with TTS_WHOLE_REPLY=0 if you want to see for yourself.
     whole_reply = os.getenv("TTS_WHOLE_REPLY", "1") == "1"
 
+    # Where a pause helps the caller: the words that make up spoken dates,
+    # times and prices, from the business's own language pack. Passed into the
+    # text layer rather than read there, so speech_text.py stays a module about
+    # markup and knows nothing about locales.
+    # Month and weekday names join the list here rather than being written out
+    # again under `speech:` — they already exist in the pack, and a name spelled
+    # two ways in two places is a name that will disagree with itself.
+    key_words = dict(
+        number_words=(
+            list(L.raw("speech.number_words", ()))
+            + list(L.raw("numbers.months", ()))
+            + list(L.raw("calendar.weekdays", ()))
+        ),
+        glue_words=L.raw("speech.glue_words", ()),
+    )
+
     if elevenlabs_key:
         voice_settings = dict(
             # Order matters: the business's own choice, then a global override
@@ -304,11 +325,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 or os.getenv("ELEVENLABS_VOICE_ID")
                 or L.text("settings.default_voice_id")
             ),
-            model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
+            model=tts_settings.MODEL,
             language=speech_language,
-            speed=float(os.getenv("ELEVENLABS_SPEED", "0.95")),
-            stability=float(os.getenv("ELEVENLABS_STABILITY", "0.4")),
-            style=float(os.getenv("ELEVENLABS_STYLE", "1.0")),
+            # From tts_settings, not from env directly: voice_lab.py auditions
+            # voices with these same numbers, and when the two lists of defaults
+            # drifted apart, voices were compared at style 0.0 and then shipped
+            # at 1.0.
+            speed=tts_settings.SPEED,
+            stability=tts_settings.STABILITY,
+            style=tts_settings.STYLE,
         )
         # ws is the streaming multi-context transport: every sentence of a reply
         # shares one context_id, so intonation carries across them. http sends a
@@ -320,7 +345,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 api_key=elevenlabs_key,
                 aiohttp_session=aiohttp_session,
                 settings=ElevenLabsHttpTTSService.Settings(**voice_settings),
-                text_filters=[SpeechTextFilter()],
+                text_filters=[SpeechTextFilter(**key_words)],
             )
         else:
             tts = ElevenLabsTTSService(
@@ -340,7 +365,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 # text filter changes the string only for synthesis, and the
                 # divergence from the original chewed letters out of words in
                 # the conversation history.
-                text_filters=[] if whole_reply else [SpeechTextFilter()],
+                text_filters=[] if whole_reply else [SpeechTextFilter(**key_words)],
             )
     else:
         tts = OpenAITTSService(
@@ -366,10 +391,27 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             extra={"parallel_tool_calls": False},
         ),
     )
+    # What was said, kept for the owner — the question they ask first about a
+    # machine answering their phone. Text only: audio recording is a different
+    # act legally (several US states need both parties' consent) and turned out
+    # to need more care with the buffer's lifecycle than it is worth today.
+    #
+    # Built here, before the tools, and not further down next to the pipeline:
+    # register() hands it to the tool handlers so a lookup shows up in the
+    # transcript, and a name used before it is bound is an UnboundLocalError
+    # that kills the call at connect — which is exactly what it did.
+    recorder = CallRecorder(
+        business_key=BUSINESS.key,
+        started_at=BUSINESS.now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
+
     # agent_tools assembles the tool set and its handlers from the business
     # config: an information-only receptionist gets take_message alone, a hotel
     # also gets bookings.
-    agent_tools.register(llm, logger, recorder)
+    # Ending the call is a pipeline action, so the object that performs it is
+    # built before the tools that ask for it.
+    call_ender = CallEnder()
+    agent_tools.register(llm, logger, recorder, ender=call_ender)
     context = LLMContext(tools=agent_tools.tools_schema())
 
     # Turn strategies are set EXPLICITLY. The default TurnAnalyzer is a
@@ -410,19 +452,42 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             stop=[ServerVADSpeechTimeoutStopStrategy(
                 user_speech_timeout=0.7, server_vad_stop_secs=0.8)],
         )
+    # How long a silence is allowed to run before the agent asks whether anyone
+    # is still there. Long enough that looking up a diary or a phone number does
+    # not trigger it — the pause that annoys people is the one that arrives
+    # while they are still thinking.
+    idle_seconds = float(os.getenv("USER_IDLE_TIMEOUT", "12"))
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(user_turn_strategies=turn_strategies),
+        user_params=LLMUserAggregatorParams(
+            user_turn_strategies=turn_strategies,
+            user_idle_timeout=idle_seconds,
+        ),
     )
 
-    # What was said, kept for the owner — the question they ask first about a
-    # machine answering their phone. Text only: audio recording is a different
-    # act legally (several US states need both parties' consent) and turned out
-    # to need more care with the buffer's lifecycle than it is worth today.
-    recorder = CallRecorder(
-        business_key=BUSINESS.key,
-        started_at=BUSINESS.now().strftime("%Y-%m-%d %H:%M:%S"),
+    async def say(line: str) -> None:
+        """Speak a fixed line, bypassing the model.
+
+        Straight to synthesis rather than through the LLM: these two lines must
+        never be improvised, and a silence is the worst moment to wait another
+        two seconds for a model to write one.
+        """
+        # Recorded by hand, because the transcript is built from the frames the
+        # model produces and this line bypasses the model. Without it a call
+        # ends with the agent apparently saying goodbye to nobody.
+        recorder.add("agent", line)
+        await user_aggregator.push_frame(TTSSpeakFrame(line), FrameDirection.DOWNSTREAM)
+
+    idle_watch = IdleWatch(
+        check_line=L.text("tools.idle_check"),
+        goodbye_line=L.text("tools.idle_goodbye"),
+        speak=say,
+        ender=call_ender,
     )
+
+    @user_aggregator.event_handler("on_user_turn_idle")
+    async def _on_idle(_aggregator):
+        await idle_watch.on_idle()
 
     def store_metrics(summary: dict) -> None:
         """One row per call: the numbers and the conversation together."""
@@ -441,20 +506,36 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             transport.input(),
             *([vad_processor] if vad_processor is not None else []),
             MuteSTTWhileBotSpeaks(),
+            # Near the input, where UserStartedSpeakingFrame passes: the strike
+            # counter has to clear the moment the caller speaks again.
+            idle_watch,
             stt,
             # Before the aggregator: it consumes TranscriptionFrame and does not
             # pass it on, so anything downstream never sees what the caller said.
             TranscriptCollector(recorder, side="caller"),
             user_aggregator,
             llm,
-            *([WholeReplyAggregator()] if whole_reply else []),
+            *([WholeReplyAggregator(**key_words)] if whole_reply else []),
             # Before the TTS, for the same reason on the other side: the TTS
             # consumes AggregatedTextFrame. This sits after WholeReplyAggregator
             # so it records one reply at a time rather than fragments.
+            # Before the transcript collector on purpose: it can REWRITE the
+            # reply, and the recording has to be of what the caller heard. A
+            # transcript that disagrees with the audio is how a fabricated
+            # confirmation survives a review.
+            ClaimGuard(L.text("tools.claim_retracted")),
             TranscriptCollector(recorder, side="agent"),
+            # Reads the assembled reply and hangs up when it is a sign-off. Must
+            # sit after the aggregator (so it sees a whole reply, not the first
+            # fragment of one) and before the TTS (which consumes the frame).
+            GoodbyeWatch(call_ender, L.raw("speech.goodbye_words", ())),
             tts,
             transport.output(),
             assistant_aggregator,
+            # After transport.output(), because that is where
+            # BotStoppedSpeakingFrame comes from — the signal that the goodbye
+            # has actually been spoken and the line can close.
+            call_ender,
             # Last on purpose. Every service pushes its metrics downstream, so
             # anywhere earlier collects the frames of whatever happens to be
             # above it — the first attempt sat before the STT and reported zeros

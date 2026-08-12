@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Голосовий адміністратор — демо</title>
+<title>Voice receptionist — demo</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%236c5ce7'/%3E%3Cpath d='M9 6h6v7a3 3 0 0 1-6 0z' fill='white'/%3E%3Cpath d='M7 12a5 5 0 0 0 10 0M12 17v3' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
 <style>
   :root {
@@ -39,8 +39,18 @@
   }
   .wrap { max-width: 1120px; margin: 0 auto; padding: 22px 18px 56px; }
 
-  /* ---------- шапка ---------- */
+  /* ---------- header ---------- */
   .top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+  .top-right { display: flex; align-items: center; gap: 10px; }
+  /* The language picker is a native <select>: on a phone that opens the
+     system list, which beats anything hand-rolled, and it stays usable with a
+     keyboard and a screen reader for free. */
+  .lang {
+    font: inherit; font-size: 13px; color: var(--ink-2);
+    background: var(--surface); border: 1px solid var(--hair);
+    border-radius: 999px; padding: 6px 11px; cursor: pointer;
+  }
+  .lang:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
   .logo { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
   .logo-mark {
     width: 34px; height: 34px; border-radius: 11px; background: var(--primary);
@@ -53,7 +63,7 @@
   }
   .lede { color: var(--ink-2); margin: 14px 0 20px; max-width: 60ch; }
 
-  /* ---------- вкладки ---------- */
+  /* ---------- tabs ---------- */
   .tabs {
     display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;
     scrollbar-width: none; -ms-overflow-style: none;
@@ -70,14 +80,14 @@
     background: var(--primary); border-color: var(--primary); color: #fff;
   }
 
-  /* ---------- сітка ---------- */
+  /* ---------- grid ---------- */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; align-items: start; }
   .card {
     background: var(--surface); border: 1px solid var(--hair);
     border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px;
   }
 
-  /* ---------- картка закладу ---------- */
+  /* ---------- business card ---------- */
   .biz-name { font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
   .biz-meta { color: var(--muted); font-size: 14px; margin-top: 5px; }
   .biz-intro { color: var(--ink-2); margin: 16px 0 0; }
@@ -100,7 +110,7 @@
   .chip:hover { border-style: solid; border-color: var(--primary); background: var(--primary-soft); }
   .chip.said { opacity: .45; }
 
-  /* ---------- панель дзвінка ---------- */
+  /* ---------- call panel ---------- */
   .call { text-align: center; }
   .dial {
     width: 128px; height: 128px; border-radius: 50%; border: none; cursor: pointer;
@@ -123,8 +133,20 @@
   .state small { display: block; font-weight: 400; color: var(--muted); font-size: 13.5px; margin-top: 3px; }
   .timer { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13.5px; margin-top: 4px; }
   .timer.warn { color: var(--warn); font-weight: 600; }
+  /* Under the button rather than beside it: the switch is a setting for the
+     next call, not a second thing to press. */
+  .voice-model {
+    margin-top: 14px; display: flex; align-items: center; justify-content: center;
+    gap: 8px; font-size: 12.5px; color: var(--muted);
+  }
+  .voice-model select {
+    font: inherit; font-size: 12.5px; color: var(--ink-2); background: var(--surface);
+    border: 1px solid var(--hair); border-radius: 999px; padding: 5px 10px; cursor: pointer;
+  }
+  .voice-model select:disabled { opacity: .5; cursor: default; }
+  .voice-model select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
-  /* ---------- розмова ---------- */
+  /* ---------- conversation ---------- */
   .talk { margin-top: 22px; text-align: left; display: none; }
   .talk.on { display: block; }
   .bubbles { display: flex; flex-direction: column; gap: 9px; max-height: 320px; overflow-y: auto; padding-right: 2px; }
@@ -143,7 +165,7 @@
   .act i { width: 17px; height: 17px; border-radius: 50%; background: var(--good); flex: none; display: grid; place-items: center; }
   .act i svg { width: 11px; height: 11px; stroke: #fff; stroke-width: 3; fill: none; }
 
-  /* ---------- результат ---------- */
+  /* ---------- result ---------- */
   .result { margin-top: 18px; text-align: left; display: none; }
   .result.on { display: block; }
   .rec {
@@ -185,15 +207,15 @@
           <rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/>
         </svg>
       </span>
-      Голосовий адміністратор
+      <span id="logoText"></span>
     </div>
-    <span class="badge-demo">демо · справжніх записів не створюється</span>
+    <div class="top-right">
+      <span class="badge-demo" id="badge"></span>
+      <select class="lang" id="lang"></select>
+    </div>
   </div>
 
-  <p class="lede">
-    Оберіть свою сферу і подзвоніть — так само, як подзвонив би ваш клієнт.
-    Розмова українською, голосом, без встановлення будь-чого.
-  </p>
+  <p class="lede" id="lede"></p>
 
   <div class="tabs" id="tabs" role="tablist"></div>
 
@@ -201,22 +223,26 @@
     <section class="card" id="biz"></section>
 
     <section class="card call call-panel">
-      <button class="dial idle" id="dial" aria-label="Подзвонити">
+      <button class="dial idle" id="dial">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="dialIcon">
           <path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/>
         </svg>
       </button>
-      <div class="state" id="state">Подзвонити</div>
+      <div class="state" id="state"></div>
       <div class="timer" id="timer"></div>
+      <div class="voice-model">
+        <label for="ttsModel" id="ttsModelLabel"></label>
+        <select id="ttsModel"></select>
+      </div>
 
       <div class="talk" id="talk">
-        <div class="section-h">Розмова</div>
+        <div class="section-h" id="talkHead"></div>
         <div class="bubbles" id="bubbles"></div>
         <div class="acts" id="acts"></div>
       </div>
 
       <div class="result" id="result">
-        <div class="section-h">Це побачить адміністратор</div>
+        <div class="section-h" id="resultHead"></div>
         <div id="resultBody"></div>
       </div>
 
@@ -232,14 +258,44 @@
 const $ = (id) => document.getElementById(id);
 const el = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
 const esc = (s) => String(s ?? "").replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-const nf = new Intl.NumberFormat("uk-UA");
 const dm = (iso) => iso.slice(8, 10) + "." + iso.slice(5, 7);
 
-/** Коли саме — так, як це прочитав би адміністратор, а не як лежить у базі. */
+/* ------------------------------ page language ------------------------------ */
+
+/** The page's own words, fetched from the language pack the agent already uses.
+ *
+ *  Everything a visitor reads that is NOT part of a business — buttons, states,
+ *  errors, column headings — comes from here. The businesses keep their own
+ *  language: a Ukrainian clinic stays Ukrainian on an English page, because its
+ *  name, prices and hours are facts about a real place and not UI copy. */
+let T = {}, LANGS = [], lang = "en";
+let nf = new Intl.NumberFormat("en");
+
+/** Which synthesis model the next call is placed on.
+ *
+ *  A model is fixed when a bot process starts, so switching here means dialling
+ *  a different port — there is one process per business per model. That is why
+ *  the control is disabled mid-call: the choice applies to the next call, and a
+ *  select that looks live but is not would be worse than one that says so. */
+let TTS_MODELS = [], ttsModel = null;
+
+/** A pack string with {placeholders} filled in.
+ *
+ *  Missing keys return the key itself rather than "undefined": if a pack is
+ *  incomplete, the page should say plainly WHICH string is missing instead of
+ *  showing a blank button. */
+function t(key, vars = {}) {
+  const raw = key.split(".").reduce((o, k) => (o == null ? o : o[k]), T);
+  if (raw == null) return key;
+  return String(raw).replace(/\{(\w+)\}/g, (m, name) => (name in vars ? vars[name] : m));
+}
+
+/** When, the way a receptionist would read it off — not the way the database
+ *  stores it. */
 function fmtWhen(startsAt, endsAt) {
   if (startsAt.includes("T")) {
     const today = new Date().toISOString().slice(0, 10);
-    const day = startsAt.slice(0, 10) === today ? "сьогодні" : dm(startsAt);
+    const day = startsAt.slice(0, 10) === today ? t("today") : dm(startsAt);
     return `${day}, ${startsAt.slice(11, 16)}`;
   }
   return `${dm(startsAt)} → ${dm(endsAt)}`;
@@ -249,28 +305,50 @@ let CARDS = [], current = null;
 let tickTimer = null;
 let callStartedUtc = null, callKey = null, seconds = 0, liveBubble = null, botBubble = null;
 let seenEvents = 0, pollTimer = null;
-let callOver = true;  // hangUp має спрацювати рівно раз на дзвінок
+let callOver = true;  // hangUp must run exactly once per call
 let botSpeaking = false, thinkingTimer = null, typingTimer = null, botSegments = [];
 
 const ICON_CALL = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/>';
 const ICON_HANGUP = '<path d="M4 5c0 9 6 15 15 15l1-4-4-2-2 2c-2-1-4-3-5-5l2-2-2-4z"/><path d="M3 3l18 18"/>';
 
-/* Дії бота людською мовою — глядач має розуміти, що саме сталося. */
-const ACTION_LABEL = {
-  check_availability: "перевірила вільний час",
-  create_booking: "створила запис у системі",
-  take_message: "записала запит на зворотний дзвінок",
-};
+/* ------------------------------ rendering ------------------------------ */
 
-/* ------------------------------ рендер ------------------------------ */
+function renderChrome() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  $("logoText").textContent = t("logo");
+  $("badge").textContent = t("badge");
+  $("lede").textContent = t("lede");
+  $("talkHead").textContent = t("section_talk");
+  $("resultHead").textContent = t("section_result");
+
+  const sel = $("lang");
+  sel.innerHTML = LANGS.map(l =>
+    `<option value="${esc(l.code)}"${l.code === lang ? " selected" : ""}>${esc(l.name)}</option>`
+  ).join("");
+  sel.setAttribute("aria-label", t("language_label"));
+  sel.title = t("language_label");
+
+  $("ttsModelLabel").textContent = t("voice_model_label");
+  const models = $("ttsModel");
+  models.innerHTML = TTS_MODELS.map(m => {
+    // The measured wait is part of the option text, because it is the whole
+    // reason there is a choice. Formatted here rather than on the server so it
+    // follows the page's language.
+    const secs = (m.ttfb_ms / 1000).toLocaleString(lang, { maximumFractionDigits: 1 });
+    return `<option value="${esc(m.id)}"${m.id === ttsModel ? " selected" : ""}>` +
+           `${esc(m.label)} · ${secs}s</option>`;
+  }).join("");
+}
 
 function renderTabs() {
   const box = $("tabs"); box.innerHTML = "";
   for (const c of CARDS) {
     const b = el(`<button class="tab" role="tab" aria-selected="${c === current}">${esc(c.tab)}</button>`);
-    // Картку записи не показуємо: людина йде дивитись іншу галузь, а не
-    // підсумок цієї. Інакше в новій вкладці спливав результат зі старої —
-    // з чужим ім'ям і телефоном.
+    // The result card is not carried across: someone switching tabs is going
+    // to look at another industry, not at a summary of this one. Leaving it up
+    // meant the new tab showed the old tab's booking — with a stranger's name
+    // and phone number on it.
     b.onclick = () => { if (client) hangUp("", false); select(c); };
     box.appendChild(b);
   }
@@ -285,23 +363,27 @@ function renderBiz() {
     </div>`).join("");
 
   const asks = c.intake.length
-    ? `<div class="section-h">Запитає також</div><div class="asks">${c.intake.map(esc).join(" · ")}</div>`
+    ? `<div class="section-h">${esc(t("section_asks"))}</div><div class="asks">${c.intake.map(esc).join(" · ")}</div>`
     : "";
 
-  const chips = c.try.map(t => `<button class="chip">«${esc(t)}»</button>`).join("");
+  // Quotation marks come from the pack: «…» in Ukrainian, “…” in English. Small,
+  // and exactly the sort of detail that gives away a page written for somewhere
+  // else.
+  const q0 = esc(t("quote_open")), q1 = esc(t("quote_close"));
+  const chips = c.try.map(x => `<button class="chip">${q0}${esc(x)}${q1}</button>`).join("");
 
   $("biz").innerHTML = `
     <div class="biz-name">${esc(c.brand)}</div>
     <div class="biz-meta">${esc([c.city, c.hours].filter(Boolean).join(" · "))}</div>
     <p class="biz-intro">${esc(c.intro)}</p>
-    <div class="section-h">Прайс, який знає ${esc(c.agent)}</div>
+    <div class="section-h">${esc(t("section_prices", { agent: c.agent }))}</div>
     ${prices}
     ${asks}
-    <div class="section-h">Спробуйте сказати</div>
+    <div class="section-h">${esc(t("section_try"))}</div>
     <div class="chips">${chips}</div>`;
 
   $("biz").querySelectorAll(".chip").forEach(ch => {
-    ch.onclick = () => ch.classList.toggle("said");  // просто відмітка «це я вже казав»
+    ch.onclick = () => ch.classList.toggle("said");  // just a "said that already" mark
   });
 }
 
@@ -314,7 +396,10 @@ function select(c) {
   $("bubbles").innerHTML = "";
   $("acts").innerHTML = "";
   note("");
-  setState("Подзвонити", `${c.agent} відповість українською`);
+  $("dial").setAttribute("aria-label", t("call"));
+  // Which language the AGENT answers in is a property of the business, not of
+  // the page: an English visitor may well want to hear the Ukrainian clinic.
+  setState(t("call"), t("answers_in", { agent: c.agent, language: c.language_name || "" }));
 }
 
 function setState(main, sub = "") {
@@ -333,12 +418,13 @@ function note(text, bad = false, actionLabel = "") {
   }
 }
 
-/* ------------------------------ розмова ------------------------------ */
+/* ------------------------------ conversation ------------------------------ */
 
-/** Крапки «вас чути» замість тексту, поки людина говорить.
- *  Проміжні здогадки Scribe показувати НЕ можна: на тиші й шумі він видає
- *  короткі слова («Да.»), і на екрані з'являється репліка, якої не було —
- *  на демо це виглядає так, ніби бот вигадує за співрозмовника. */
+/** Dots meaning "we can hear you" instead of text, while the person is talking.
+ *
+ *  Scribe's interim guesses must NOT be shown: on silence and noise it emits
+ *  short words ("Yeah."), and a line nobody said appears on screen — which in a
+ *  demo looks exactly as though the bot were making up the caller's side. */
 function typingBubble() {
   const box = $("bubbles");
   if (!liveBubble) {
@@ -359,26 +445,27 @@ function bubble(who, text) {
   box.scrollTop = box.scrollHeight;
 }
 
-/** Одна репліка бота — одна бульбашка, зібрана з речень.
+/** Strip the markup meant for the synthesiser out of what goes on screen.
  *
- *  Речення приходять окремими подіями і НЕ обов'язково по порядку (кожен
- *  сегмент шлеться двічі: коли поставлений у чергу і коли озвучений). Тому
- *  тримаємо їх у списку і щоразу перезбираємо текст за segment_id — інакше
- *  ціна опиняється перед фразою, до якої вона належить. */
-/** Прибрати службову розмітку з тексту, який показуємо на екрані.
- *
- *  Чистити треба ПІСЛЯ склейки: репліка приходить шматками, і тег пауз легко
- *  розривається навпіл («<break time="0.» + «4s" />»). Кожен шматок окремо під
- *  шаблон не підпадає, і на екран лізе «0. 4s». */
-function cleanSpeech(t) {
-  return String(t)
-    .replace(/<[^>]*>/g, " ")   // цілі теги
-    .replace(/<[^>]*$/, " ")    // обірваний тег у кінці
+ *  Cleaning has to happen AFTER the segments are joined: a reply arrives in
+ *  pieces, and a pause tag is easily split in half ('<break time="0.' +
+ *  '4s" />'). Neither piece matches the pattern on its own, and "0. 4s" ends up
+ *  on the screen. */
+function cleanSpeech(raw) {
+  return String(raw)
+    .replace(/<[^>]*>/g, " ")   // whole tags
+    .replace(/<[^>]*$/, " ")    // a tag cut off at the end
     .replace(/\s+([,.!?…])/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }
 
+/** One reply from the bot is one bubble, assembled out of sentences.
+ *
+ *  The sentences arrive as separate events and NOT necessarily in order (each
+ *  segment is sent twice: when queued and when spoken). So they are kept in a
+ *  list and the text is rebuilt by segment_id every time — otherwise the price
+ *  ends up ahead of the sentence it belongs to. */
 function botSay(segmentId, text) {
   const box = $("bubbles");
   clearTyping();
@@ -387,10 +474,10 @@ function botSay(segmentId, text) {
     box.appendChild(botBubble);
     botSegments = [];
   }
-  // ОДИН сегмент приходить БАГАТО разів: сервер шле його заново на кожне
-  // озвучене слово (spoken_status: new → in-progress → completed), і текст
-  // щоразу повний. Без заміни по segment_id репліка множилась на екрані
-  // двадцять разів поспіль.
+  // ONE segment arrives MANY times: the server resends it for every spoken word
+  // (spoken_status: new → in-progress → completed) and the text is complete each
+  // time. Without replacing by segment_id the reply multiplied down the screen
+  // twenty times over.
   const id = Number(segmentId) || 0;
   const seen = botSegments.find((x) => x.id === id);
   if (seen) seen.text = text;
@@ -401,19 +488,22 @@ function botSay(segmentId, text) {
 }
 
 function action(name, ref) {
-  const label = ACTION_LABEL[name];
+  // From the business's own pack, not the page's: this line sits directly under
+  // the agent's replies and describes what THAT agent just did.
+  const label = (current?.actions || {})[name];
   if (!label) return;
   $("acts").appendChild(el(`
     <div class="act"><i><svg viewBox="0 0 24 24"><path d="M4 12l6 6L20 6"/></svg></i>${
-      esc(label)}${/^[А-ЯA-Z]{2}-\d+$/.test(ref || "") ? ` <b style="font-weight:600">${esc(ref)}</b>` : ""}</div>`));
+      esc(label)}${/^[\p{Lu}]{2}-\d+$/u.test(ref || "") ? ` <b style="font-weight:600">${esc(ref)}</b>` : ""}</div>`));
 }
 
-/** Стрічка «що зробила Оксана» — опитуванням журналу подій закладу.
+/** The "here's what the agent just did" strip, driven by polling the business's
+ *  event log.
  *
- *  Через RTVI це не працює: server-message із хвоста пайплайна до клієнта не
- *  доходить. Тому інструменти пишуть рядок у таблицю events, а сторінка її
- *  читає. Це не милиця заради демо — той самий журнал згодом стане списком
- *  дзвінків для власника. */
+ *  Over RTVI this does not work: a server-message from the tail of the pipeline
+ *  never reaches the client. So the tools write a row into `events` and the page
+ *  reads it. Not a demo crutch — that same log becomes the owner's call history
+ *  later on. */
 async function pollEvents() {
   if (!callKey || !callStartedUtc) return;
   const key = callKey, since = callStartedUtc;
@@ -421,17 +511,18 @@ async function pollEvents() {
   try {
     data = await (await fetch(`/api/activity/${key}?since=${encodeURIComponent(since)}`)).json();
   } catch { return; }
-  if (key !== callKey) return;  // встигли перемкнути галузь, поки чекали
+  if (key !== callKey) return;  // the industry was switched while we waited
   const events = data.events || [];
   for (const e of events.slice(seenEvents)) action(e.kind, e.detail);
   seenEvents = Math.max(seenEvents, events.length);
 }
 
-/* ------------------------------ дзвінок ------------------------------ */
+/* ------------------------------ the call ------------------------------ */
 
-/** Підключення веде офіційний SDK pipecat (bundle у /static/voice-client.js).
- *  Ручна реалізація протоколу коштувала чотирьох багів поспіль — від невірного
- *  типу повідомлення з текстом бота до обриву звуку на першій секунді. */
+/** The connection is handled by the official pipecat SDK (bundled into
+ *  /static/voice-client.js). Implementing the protocol by hand cost four bugs
+ *  in a row — from the wrong message type for the bot's text to the audio
+ *  cutting out during the first second. */
 let client = null, audioCtx = null, audioSrc = null;
 
 function attachBotAudio(track) {
@@ -439,11 +530,10 @@ function attachBotAudio(track) {
   const stream = new MediaStream([track]);
   a.srcObject = stream;
   a.muted = false;
-  a.play().catch(() =>
-    note("Браузер заблокував звук. Натисніть «Увімкнути звук».", true, "Увімкнути звук"));
+  a.play().catch(() => note(t("err_audio_blocked"), true, t("enable_sound")));
 }
 
-function playBotAudio() {                 // кнопка «Увімкнути звук»
+function playBotAudio() {                 // the "Enable sound" button
   const a = $("botAudio");
   a.muted = false;
   a.play().then(() => note("")).catch(() => {});
@@ -453,7 +543,7 @@ function playBotAudio() {                 // кнопка «Увімкнути �
 async function call() {
   const c = current;
   if (!window.isSecureContext) {
-    note("Мікрофон працює лише через https або з localhost. Відкрийте демо за захищеним посиланням.", true);
+    note(t("err_https"), true);
     return;
   }
   note("");
@@ -463,24 +553,29 @@ async function call() {
   liveBubble = botBubble = null;
   botSegments = []; botSpeaking = false; seenEvents = 0;
   callOver = false; callKey = c.key;
-  // Кнопку НЕ блокуємо: якщо з'єднання зависне (а воно вміє — SDK тягне свій
-  // модуль зі стороннього CDN), єдиним виходом лишалось перезавантаження.
-  setState("З'єднуємось…", "натисніть ще раз, щоб скасувати");
+  // The button is deliberately NOT disabled: if the connection hangs (and it
+  // can — the SDK pulls its own module from a third-party CDN), reloading the
+  // page was the only way out.
+  setState(t("connecting"), t("hint_cancel"));
 
-  // Мітку старту дзвінка бере СЕРВЕР: created_at у базі — його datetime('now'),
-  // а годинник телефона може відставати на хвилини. Розбіжність виглядала б як
-  // «за цю розмову нічого не записано» одразу після успішного запису.
+  // The call's start mark comes from the SERVER: created_at in the database is
+  // its own datetime('now'), and a phone's clock can be minutes behind. The
+  // difference would show up as "nothing was recorded for this call" straight
+  // after a booking went through.
   callStartedUtc = await serverNow();
 
-  const base = `${location.protocol}//${location.hostname}:${c.port}`;
+  // The port carries the model: one bot process per (business, model).
+  const port = (c.ports && c.ports[ttsModel]) || c.port;
+  const base = `${location.protocol}//${location.hostname}:${port}`;
   client = window.createVoiceClient(base, {
     onReady: () => {
       $("dial").disabled = false;
       $("dial").classList.remove("idle");
       $("dial").classList.add("live");
       $("dialIcon").innerHTML = ICON_HANGUP;
-      $("dial").setAttribute("aria-label", "Покласти трубку");
-      setState("Говоріть", "натисніть ще раз, щоб покласти трубку");
+      $("dial").setAttribute("aria-label", t("hang_up"));
+      $("ttsModel").disabled = true;   // the model is fixed for this call
+      setState(t("go_ahead"), t("hint_hang_up"));
       pollTimer = setInterval(pollEvents, 2000);
       startTimer();
       if (client?.mediaState?.mic?.state === "error") micDead();
@@ -492,13 +587,13 @@ async function call() {
       typingBubble();
       clearTimeout(typingTimer);
       typingTimer = setTimeout(clearTyping, 6000);
-      setState("Слухаю", "говоріть звичайним голосом");
+      setState(t("listening"), t("hint_speak_normally"));
     },
     onUserStop: () => {
       if (botSpeaking) return;
-      setState("Обробляю…", "секунду");
+      setState(t("thinking"), t("hint_a_second"));
       clearTimeout(thinkingTimer);
-      thinkingTimer = setTimeout(() => setState("Слухаю", "говоріть звичайним голосом"), 8000);
+      thinkingTimer = setTimeout(() => setState(t("listening"), t("hint_speak_normally")), 8000);
     },
     onUserText: (text) => { clearTimeout(typingTimer); bubble("me", text); },
     onBotText: (text, segmentId) => {
@@ -509,42 +604,43 @@ async function call() {
     onBotStart: () => {
       botSpeaking = true;
       clearTimeout(thinkingTimer);
-      setState("Говорить " + c.agent, "перебивайте, коли захочете");
+      setState(t("speaking", { agent: c.agent }), t("hint_interrupt"));
     },
     onBotStop: () => { botSpeaking = false; clearTimeout(thinkingTimer);
-                       setState("Слухаю", "говоріть звичайним голосом"); },
+                       setState(t("listening"), t("hint_speak_normally")); },
     onEnd: () => hangUp(),
-    onError: () => note(`Бот цієї сфери зараз не відповідає (порт ${c.port}).`, true),
+    onError: () => note(t("err_bot_down", { port }), true),
   });
 
   try {
-    // Таймаут обов'язковий: якщо SDK не дістає свій модуль із CDN (корпоративна
-    // мережа, впав інтернет), connect() не резолвиться і не падає — просто
-    // висить вічно, а на екрані назавжди лишається «З'єднуємось…».
+    // The timeout is not optional: if the SDK cannot fetch its module from the
+    // CDN (a corporate network, the internet down), connect() neither resolves
+    // nor throws — it just hangs, and the screen says "Connecting…" forever.
     await Promise.race([
       client.connect(),
       new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 20000)),
     ]);
   } catch (e) {
-    if (callOver) return;  // встигли скасувати вручну
+    if (callOver) return;  // cancelled by hand in the meantime
     client = null;
     hangUp("", false);
-    note(`Не вдалося з'єднатися з ботом (порт ${c.port}). Перевірте інтернет і що запущено run_demo.py.`, true);
+    note(t("err_connect", { port }), true);
   }
 }
 
-/** Мікрофон не дали або його немає.
+/** The microphone was refused, or there isn't one.
  *
- *  Найпідступніший сценарій демо: SDK ковтає відмову getUserMedia і піднімає
- *  з'єднання ЗОВСІМ без аудіо-треку. Бот вітається, індикатори бігають, а на
- *  будь-яку фразу — тиша. Власник робить висновок «ваш бот не працює». */
+ *  The nastiest failure in a demo: the SDK swallows the getUserMedia rejection
+ *  and brings the connection up with NO audio track at all. The bot greets you,
+ *  the indicators move, and every sentence is met with silence — from which the
+ *  owner concludes "your bot doesn't work". */
 function micDead() {
-  note("Браузер не дав доступ до мікрофона — бот вас не почує. "
-       + "Дозвольте мікрофон у налаштуваннях сайту і подзвоніть ще раз.", true);
+  note(t("err_mic"), true);
   hangUp("", false);
 }
 
-/** Час за годинником сервера (той самий, яким база штампує created_at). */
+/** The time by the server's clock — the same one the database stamps
+ *  created_at with. */
 async function serverNow() {
   try {
     return (await (await fetch("/api/now")).json()).utc;
@@ -562,24 +658,24 @@ function startTimer() {
     const ss = String(seconds % 60).padStart(2, "0");
     const left = limit - seconds;
     $("timer").textContent = limit && left <= 30
-      ? `${mm}:${ss} · демо-дзвінок завершиться за ${left} с`
+      ? `${mm}:${ss} · ${t("timer_ends_in", { n: left })}`
       : `${mm}:${ss}`;
     $("timer").classList.toggle("warn", !!limit && left <= 30);
     if (limit && seconds >= limit) {
-      hangUp(`Демо-дзвінок обмежений ${Math.round(limit / 60)} хв — натисніть, щоб подзвонити ще раз.`);
+      hangUp(t("limit_reached", { n: Math.round(limit / 60) }));
     }
   }, 1000);
 }
 
-/** Покласти трубку. Рівно один раз на дзвінок.
+/** Hang up. Exactly once per call.
  *
- *  disconnect() сам віддає onDisconnected → onEnd → hangUp, тож без прапорця
- *  функція виконувалась двічі: другий прохід відпрацьовував уже після
- *  перемикання вкладки й перетирав стан нової галузі.
+ *  disconnect() itself produces onDisconnected → onEnd → hangUp, so without the
+ *  flag this ran twice: the second pass happened after the tab had already been
+ *  switched and overwrote the new industry's state.
  *
- *  reason — чому обірвалось; без нього завершення по ліміту виглядало як
- *  падіння бота. showRecord=false, коли підсумок недоречний (пішли дивитись
- *  іншу галузь, не дали мікрофон, не з'єднались). */
+ *  `reason` says why the call ended; without it, hitting the time limit looked
+ *  like the bot crashing. showRecord=false when a summary makes no sense — went
+ *  to look at another industry, refused the microphone, never connected. */
 function hangUp(reason = "", showRecord = true) {
   if (callOver) return;
   callOver = true;
@@ -594,24 +690,26 @@ function hangUp(reason = "", showRecord = true) {
   $("dial").classList.remove("live");
   $("dial").classList.add("idle");
   $("dialIcon").innerHTML = ICON_CALL;
-  $("dial").setAttribute("aria-label", "Подзвонити");
-  setState("Подзвонити ще раз", "");
+  $("dial").setAttribute("aria-label", t("call"));
+  $("ttsModel").disabled = false;
+  setState(t("call_again"), "");
   if (reason) note(reason);
   const key = callKey, since = callStartedUtc;
   callKey = null;
   if (showRecord && since) showResult(key, since);
 }
 
-/* --------------------------- що лишилось після --------------------------- */
+/* --------------------------- what it left behind --------------------------- */
 
 async function showResult(key, since) {
-  // Заклад і мітку часу беремо ті, з якими дзвонили, а не поточні: поки ми
-  // чекаємо відповідь, людина може перемкнути вкладку — і в неї покажеться
-  // чужий запис із чужим телефоном.
+  // The business and the timestamp are the ones the call was made with, not the
+  // current ones: while we wait for the answer the visitor can switch tabs, and
+  // they would be shown a stranger's booking with a stranger's phone number.
   const c = CARDS.find(x => x.key === key) || current;
   $("result").classList.add("on");
-  $("resultBody").innerHTML = `<div class="empty">Дивимось, що з'явилось у системі…</div>`;
-  // Останні кадри розмови ще можуть дописуватись — даємо їм секунду.
+  $("resultBody").innerHTML = `<div class="empty">${esc(t("result_looking"))}</div>`;
+  // The last frames of the conversation may still be being written — give them
+  // a second.
   await new Promise(r => setTimeout(r, 1200));
   let data = { bookings: [], messages: [] };
   try {
@@ -622,44 +720,88 @@ async function showResult(key, since) {
     const det = b.details ? JSON.parse(b.details) : {};
     const when = fmtWhen(b.starts_at, b.ends_at);
     const rows = [
-      ["Клієнт", `${b.customer_name}, ${b.phone}`],
-      [c.intake.length ? "Куди" : "", det.address || ""],
-      ["Що", b.resource_label],
-      ["Коли", when],
-      ["Сума", `${nf.format(b.total_price)} ${c.currency}`],
-      ["Деталі", Object.entries(det).filter(([k]) => k !== "address").map(([, v]) => v).join(" · ")],
+      [t("row_customer"), `${b.customer_name}, ${b.phone}`],
+      [c.intake.length ? t("row_where") : "", det.address || ""],
+      [t("row_what"), b.resource_label],
+      [t("row_when"), when],
+      [t("row_total"), `${nf.format(b.total_price)} ${c.currency}`],
+      [t("row_details"), Object.entries(det).filter(([k]) => k !== "address").map(([, v]) => v).join(" · ")],
     ].filter(([k, v]) => k && v);
     return `<div class="rec">
-      <div class="rec-h"><span class="rec-title">Новий ${esc(c.action)}</span>
+      <div class="rec-h"><span class="rec-title">${esc(t("record_new", { action: c.action }))}</span>
         <span class="rec-ref">${esc(b.ref_code)}</span></div>
       ${rows.map(([k, v]) => `<div class="rec-row"><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}
     </div>`;
   }).concat(data.messages.map(m => `
     <div class="rec">
-      <div class="rec-h"><span class="rec-title">Запит на зворотний дзвінок</span></div>
-      <div class="rec-row"><b>Клієнт</b><span>${esc(m.customer_name)}, ${esc(m.phone)}</span></div>
-      <div class="rec-row"><b>Питання</b><span>${esc(m.topic)}</span></div>
+      <div class="rec-h"><span class="rec-title">${esc(t("record_message"))}</span></div>
+      <div class="rec-row"><b>${esc(t("row_customer"))}</b><span>${esc(m.customer_name)}, ${esc(m.phone)}</span></div>
+      <div class="rec-row"><b>${esc(t("row_question"))}</b><span>${esc(m.topic)}</span></div>
     </div>`));
 
   $("resultBody").innerHTML = parts.length
     ? parts.join('<div style="height:10px"></div>')
-    : `<div class="empty">За цю розмову нічого не записано — спробуйте довести діалог до запису.</div>`;
+    : `<div class="empty">${esc(t("result_empty"))}</div>`;
 }
 
-/* ------------------------------ старт ------------------------------ */
+/* ------------------------------ startup ------------------------------ */
 
-// Поки йде з'єднання, та сама кнопка = «скасувати»; підсумок дзвінка, якого не
-// було, показувати нема сенсу — звідси tickTimer як ознака, що розмова почалась.
+// While connecting, the same button means "cancel"; showing the summary of a
+// call that never happened makes no sense — hence tickTimer as the sign that a
+// conversation actually started.
 $("dial").onclick = () => (client ? hangUp("", tickTimer !== null) : call());
+
+/** Load the page's words for one language and repaint everything showing them.
+ *
+ *  Kept as its own step so switching language mid-visit costs one small fetch
+ *  and no reload — a visitor who lands on the wrong language should not have to
+ *  find their place again. */
+async function setLanguage(code) {
+  const ui = await (await fetch(`/api/ui?lang=${encodeURIComponent(code || "")}`)).json();
+  T = ui.strings || {};
+  LANGS = ui.languages || [];
+  lang = ui.lang;
+  // Group separators and decimal marks differ by language; prices are read off
+  // this page next to a currency, so getting it wrong is visible.
+  nf = new Intl.NumberFormat(lang);
+  try { localStorage.setItem("demoLang", lang); } catch {}
+  renderChrome();
+  if (current) select(current);
+}
+
+$("ttsModel").onchange = (e) => {
+  ttsModel = e.target.value;
+  try { localStorage.setItem("demoTtsModel", ttsModel); } catch {}
+};
+
+$("lang").onchange = (e) => {
+  if (client) hangUp("", false);   // the state strings are about to be replaced
+  setLanguage(e.target.value);
+};
 
 (async function init() {
   try {
+    TTS_MODELS = await (await fetch("/api/tts-models")).json();
+  } catch { TTS_MODELS = []; }
+  let savedModel = null;
+  try { savedModel = localStorage.getItem("demoTtsModel"); } catch {}
+  // A remembered id that no longer exists must not leave the page dialling a
+  // port nobody is listening on.
+  ttsModel = TTS_MODELS.some(m => m.id === savedModel)
+    ? savedModel
+    : (TTS_MODELS[0] || {}).id || null;
+
+  let saved = null;
+  try { saved = localStorage.getItem("demoLang"); } catch {}
+  await setLanguage(saved || "");
+
+  try {
     CARDS = await (await fetch("/api/businesses")).json();
   } catch {
-    note("Не вдалося завантажити список сфер.", true);
+    note(t("err_industries"), true);
     return;
   }
-  if (!CARDS.length) { note("Жодної сфери не налаштовано.", true); return; }
+  if (!CARDS.length) { note(t("err_none_configured"), true); return; }
   select(CARDS[0]);
 })();
 </script>

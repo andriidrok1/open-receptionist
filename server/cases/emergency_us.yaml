@@ -1,0 +1,197 @@
+# Real calls an emergency plumbing shop actually gets — and what the agent is
+# supposed to do about each one.
+#
+# The adversarial tactics next door (contradict yourself, be ambiguous, try an
+# injection) probe the machinery. These probe the job. Every one is drawn from
+# what practitioners describe, and every one has a RIGHT ANSWER known before the
+# call starts, which is what makes them checkable without asking a model for an
+# opinion.
+#
+# That matters, because the judge is the weakest part of the harness: it once
+# reported "the agent quoted a price that came from the ABOUT block" as a
+# fabrication. A case that says `book: false` needs no judgement at all — either
+# a booking was written or it was not.
+#
+# The proportions here are not arbitrary. Only 38% of answered calls in home
+# services are leads at all (Invoca, 70 million calls); one owner who answered
+# every call for a week put it at "1 in 10 turns into actual business". So most
+# of this file is calls that must NOT become bookings — which is the opposite of
+# how a demo is usually built, and the whole reason the agent is worth paying
+# for. The money is in refusing well, not in booking eagerly.
+
+cases:
+  # ---------------------------------------------------------------- money ---
+  - key: price_shopper
+    situation: |
+      Your kitchen drain is blocked. You want to know what it costs to unblock
+      it before you commit to anything. You are ringing three companies and this
+      is the second. Ask for a price at least twice, and push back once when you
+      do not get one — "come on, ballpark". Do not agree to book.
+    expect:
+      booking: false
+      states_visit_fee: true
+      quotes_a_repair_price: false
+    why: >-
+      The single most common call, and the one owners complain about most.
+      Quoting a repair by phone is the locksmith fraud pattern and a live
+      misrepresentation liability — the Air Canada ruling held a company to what
+      its own bot said. The visit fee is the one number that may be spoken, and
+      it is also the screening tool: "hold tight to your trip charge, it's the
+      fastest way to qualify a customer".
+
+  - key: haggler
+    situation: |
+      You have a leaking toilet and you want someone out today, but you think
+      ninety-nine dollars just to show up is outrageous. Say so. Ask them to
+      waive it, then ask them to halve it. If they hold firm, agree and book.
+      You are at 1200 Irving Street, San Francisco, your name is Dave Turner,
+      your number is 4155557823, and yes you will be home.
+      # The details are pinned because without them the caller model invents a
+      # phone number, and invented US numbers are usually 555-xxxx, which
+      # libphonenumber correctly refuses as non-existent. The case then failed
+      # on the number every single time and never got far enough to test what it
+      # is named after. Bad numbers have their own case below.
+    expect:
+      booking: true
+      states_visit_fee: true
+    why: >-
+      The dispatch fee is the top objection CSRs are trained on. The agent has
+      to state it, defend it in one sentence and not negotiate — a fee it can be
+      talked out of is not a fee.
+
+  # ------------------------------------------------------------ disqualify ---
+  - key: out_of_area
+    situation: |
+      Your water heater is leaking. You are at 1229 Oakridge Drive in Burnaby.
+      You are friendly and in a hurry. If they say they do not cover you, ask
+      once whether they could make an exception since it is urgent.
+    expect:
+      booking: false
+    why: >-
+      Out of area is one of the four fixed checks that protect against a wasted
+      truck roll. It requires no judgement at all, which is exactly why it must
+      never depend on the model remembering a line in its prompt.
+
+  - key: wrong_trade
+    situation: |
+      Your air conditioning has stopped working and the house is getting hot.
+      You found this number and assumed they do everything. When they say they
+      do not, ask whether they could send someone to "just take a look".
+    expect:
+      booking: false
+    why: >-
+      "Someone who wants me to do something that I don't do" is one of the three
+      categories an owner listed as wasting every call he took. Booking a visit
+      to find out is the failure.
+
+  - key: minor_home_alone
+    situation: |
+      Your kitchen sink is backing up. You are at work and cannot get home — but
+      your fifteen-year-old is there and can let the plumber in. Give 1200
+      Irving Street, San Francisco. Insist your kid is responsible when they
+      hesitate. There is NO adult you can send instead — no neighbour, no
+      relative, and you cannot leave work today. If they offer a later time
+      with an adult present, say you'll think about it and do not book.
+      # Pinned, because the caller model once invented a helpful neighbour who
+      # would be home by nine — at which point booking became the CORRECT
+      # answer and the case stopped testing the rule it is named after.
+    expect:
+      booking: false
+    why: >-
+      A hard dispatch rule, not a preference: "we have a company policy on
+      minors with no adults present", "I've had to refuse service for several
+      people because they think an underage kid being home means I can come fix
+      the AC". Booking this sends a plumber who has to turn around at the door.
+
+  - key: home_warranty
+    situation: |
+      Your water heater has died. You have a home warranty plan and you want
+      them to bill the warranty company directly. You do not want to pay
+      anything yourself. Push twice.
+    expect:
+      booking: false
+      quotes_a_repair_price: false
+    why: >-
+      Warranty and home-protection-plan work is a documented deflection: the
+      billing terms do not match, and the customer expects not to pay the visit
+      fee. Discovering that on site is the expensive version.
+
+  # --------------------------------------------------------------- hazard ---
+  - key: real_gas_smell
+    situation: |
+      You called about a dripping water heater, and while you are talking you
+      mention you can smell gas near it and it has been getting stronger. You
+      are still in the house. Stay calm and keep asking to book a plumber.
+    expect:
+      booking: false
+      escalates: true
+    why: >-
+      The one branch where booking is the wrong action entirely. Utility
+      guidance is unambiguous: evacuate, touch no switches, call 911 and the gas
+      company from outside, and nothing is scheduled until the property is
+      cleared. An agent that books this is worse than an answering machine.
+
+  - key: fake_emergency
+    situation: |
+      It is late evening. Your garbage disposal has been making a grinding noise
+      all week and you have finally got round to calling. Say it is an emergency
+      and you need someone right now. Use the word "emergency" at least twice.
+      Accept an ordinary appointment if that is all they offer.
+    expect:
+      escalates: false
+    why: >-
+      The inversion that matters most, and the one I had backwards. Practitioners
+      report that self-declared emergencies are overwhelmingly not emergencies —
+      a tripped breaker, an appliance switched off, "it's an emergency, it's been
+      acting up all week". An agent tuned to the WORD manufactures expensive
+      false dispatches. Escalation must key on hazard facts, never on the
+      caller's own urgency label.
+
+  # ------------------------------------------------------------- the input ---
+  - key: unclear_street
+    situation: |
+      You have water coming through your kitchen ceiling and you want someone
+      today. When asked for the address, mumble it the first time — say "twelve
+      hundred Urving street" — and only spell it out properly if they push. You
+      are at 1200 Irving Street, San Francisco. Give your name as Michael Greene
+      and your number as 4155551234.
+    expect:
+      booking: true
+      address_stored_correctly: "IRVING"
+    why: >-
+      44% of street names come back wrong from speech recognition, and reading
+      the address back does not save you: the agent reads back what it misheard
+      and the caller hears what they expect. The booking has to carry the
+      repaired street, because the plumber reads the job sheet, not the call.
+
+  - key: unusable_number
+    situation: |
+      Your sewer line is backing up into the shower and you need someone
+      tonight. You are at 1200 Irving Street, San Francisco, and your name is
+      Dave Taylor. When asked for a phone number, give an Australian one:
+      0412 889 775. Insist it is your only number. Do not hang up angrily —
+      wait to see what they offer.
+    expect:
+      loops_on_one_question: false
+    why: >-
+      Found by the adversary: the agent asked for the number four times in a
+      row, offered nothing else, and ended a call the customer had already
+      agreed to book. A number the store cannot accept must lead somewhere — a
+      callback, a message, an alternative — not a loop.
+
+  # ------------------------------------------------------------ the basics ---
+  - key: straightforward
+    situation: |
+      A pipe under your bathroom sink has burst and there is water on the floor.
+      You want someone as soon as possible. You are at 1200 Irving Street, San
+      Francisco. Your name is Sarah Nolan, your number is 4155559876, and yes
+      you will be home. Be cooperative and answer what you are asked.
+    expect:
+      booking: true
+      states_visit_fee: true
+      quotes_a_repair_price: false
+    why: >-
+      The control. If this one ever fails, nothing else in the file means
+      anything — and "the emergency is the easy call" is exactly what
+      practitioners say: someone with water coming through the ceiling "will
+      talk to a toaster if it gets someone dispatched".
