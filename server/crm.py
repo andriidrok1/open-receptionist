@@ -1232,6 +1232,21 @@ def inbox(limit: int = 100) -> list[dict]:
     return items[:limit]
 
 
+def mark_handled_by_ref(ref_code: str) -> bool:
+    """The owner's checkmark, addressed by reference code.
+
+    Exists for the dashboard's own cancel button: cancel_booking resets
+    handled_at so a CALLER's cancellation comes back into the feed as news,
+    but a cancellation the owner performed is not news to the owner.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM bookings WHERE ref_code = ?",
+            ((ref_code or "").strip().upper(),),
+        ).fetchone()
+    return bool(row) and mark_handled("booking", row["id"])
+
+
 def mark_handled(kind: str, item_id: str, handled: bool = True) -> bool:
     """The owner's checkmark on an inbox item. Returns False for an unknown id.
 

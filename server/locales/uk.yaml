@@ -506,6 +506,13 @@ dashboard:
   outcome_none: без результату
   replies_label: реплік
   close: Закрити
+  agent_offline: Не в мережі
+  agent_down_warning: Агент не відповідає — дзвінки зараз не приймаються.
+  cancel_booking: Скасувати
+  confirm_cancel: Підтвердити скасування
+  cancel_failed: Не вдалося скасувати — оновіть сторінку і спробуйте ще раз.
+  search_placeholder: Пошук — ім'я, телефон, адреса
+  no_results: За пошуком нічого не знайдено.
   # Сторінка входу.
   login_title: Вхід для власника
   password: Пароль

@@ -538,6 +538,13 @@ dashboard:
   outcome_none: no outcome
   replies_label: replies
   close: Close
+  agent_offline: Offline
+  agent_down_warning: The agent is not answering — calls are not being picked up right now.
+  cancel_booking: Cancel
+  confirm_cancel: Confirm cancellation
+  cancel_failed: Could not cancel — refresh and try again.
+  search_placeholder: Search — name, phone, address
+  no_results: Nothing matches the search.
   # The sign-in page.
   login_title: Owner sign-in
   password: Password

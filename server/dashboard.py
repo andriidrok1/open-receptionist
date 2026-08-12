@@ -24,7 +24,9 @@ import hashlib
 import hmac
 import os
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import crm
 from business import BUSINESS
@@ -92,6 +94,40 @@ def _dash_ui() -> dict:
     return BUSINESS.pack.raw("dashboard")
 
 
+# ------------------------------- agent health -------------------------------
+#
+# The sidebar used to show a green "Online" dot that was simply painted on —
+# it stayed green with the bot process dead, which is worse than no indicator:
+# the owner trusts the dot precisely on the night the agent is down. The check
+# is a TCP connect to the bot's port: it proves a process is listening, which
+# is exactly what a painted dot only claimed.
+
+BOT_HOST = os.getenv("BOT_HOST", "127.0.0.1")
+BOT_PORT = int(os.getenv("BOT_PORT", "7860"))
+_HEALTH_TTL = 5.0
+_health: dict = {"at": 0.0, "online": False}
+
+
+async def _agent_online() -> bool:
+    """Is anything listening where the bot should be? Cached for a few seconds
+    so ten open dashboards do not turn the poll into a knock storm."""
+    now = time.monotonic()
+    if now - _health["at"] < _HEALTH_TTL:
+        return _health["online"]
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(BOT_HOST, BOT_PORT), timeout=1.0
+        )
+        writer.close()
+        online = True
+    except OSError:
+        online = False
+    except asyncio.TimeoutError:
+        online = False
+    _health.update(at=now, online=online)
+    return online
+
+
 # ------------------------------- business card -------------------------------
 
 BUSINESS_INFO = {
@@ -100,6 +136,9 @@ BUSINESS_INFO = {
     "agent": os.getenv("AGENT_NAME", BUSINESS.agent_name),
     "currency": BUSINESS.currency,
     "is_slots": BOOK.is_slots,
+    # The business's clock, so "today" on a card means today AT THE BUSINESS —
+    # an owner reading from another timezone was shown yesterday as today.
+    "tz": BUSINESS.tz,
     # The trades promise "between nine and ten", so the inbox shows the same
     # window the caller heard, not a minute the crew will be judged against.
     "arrival_window_min": BOOK.arrival_window_min,
@@ -190,9 +229,17 @@ def api_stats(request: Request) -> JSONResponse:
 
 
 @app.get("/api/inbox")
-def api_inbox(request: Request) -> JSONResponse:
+async def api_inbox(request: Request) -> JSONResponse:
     _require_owner(request)
-    return JSONResponse({"items": crm.inbox(), "business": BUSINESS_INFO})
+    return JSONResponse(
+        {
+            "items": crm.inbox(),
+            "business": BUSINESS_INFO,
+            "agent_online": await _agent_online(),
+            # Today at the business, for the cards' "today vs date" labels.
+            "today": datetime.now(ZoneInfo(BUSINESS.tz)).strftime("%Y-%m-%d"),
+        }
+    )
 
 
 @app.get("/api/calls")
@@ -208,6 +255,22 @@ def api_call(request: Request, call_id: str) -> JSONResponse:
     if call is None:
         raise HTTPException(status_code=404)
     return JSONResponse(call)
+
+
+class CancelBody(BaseModel):
+    ref_code: str
+
+
+@app.post("/api/cancel")
+def api_cancel(request: Request, body: CancelBody) -> JSONResponse:
+    _require_owner(request)
+    out = crm.cancel_booking(body.ref_code)
+    if not out.get("success"):
+        return JSONResponse({"ok": False, "error": out.get("error")}, status_code=409)
+    # The owner is the one cancelling — not news to them, the checkmark goes
+    # straight back on (see crm.mark_handled_by_ref).
+    crm.mark_handled_by_ref(out["ref_code"])
+    return JSONResponse({"ok": True, "ref_code": out["ref_code"]})
 
 
 class HandledBody(BaseModel):

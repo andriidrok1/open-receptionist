@@ -17,13 +17,18 @@ const { useState, useEffect, useCallback, useRef } = React;
 const nf = new Intl.NumberFormat();
 const two = (n) => String(n).padStart(2, "0");
 
+/* Today at the BUSINESS, delivered by the server with each inbox poll — the
+ * browser's own date is wrong exactly when the owner reads from another
+ * timezone. The browser's date fills in only before the first poll lands. */
+let BIZ_TODAY = null;
+
 /* "YYYY-MM-DD HH:MM:SS" in the business's timezone → "17:42" today,
  * "12.08, 17:42" otherwise. */
 function fmtAt(stamp) {
   if (!stamp) return "";
   const [d, t] = stamp.split(" ");
   const now = new Date();
-  const today = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+  const today = BIZ_TODAY || `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
   const hm = t ? t.slice(0, 5) : "";
   return d === today ? hm : `${d.slice(8, 10)}.${d.slice(5, 7)}, ${hm}`;
 }
@@ -103,7 +108,14 @@ function NavButton({ icon, label, active, count, onClick }) {
   </button>`;
 }
 
-function Sidebar({ biz, ui, view, setView, newCount }) {
+function AgentState({ ui, online }) {
+  return html`<div className="agent-state" style=${online ? {} : { color: "var(--crit)" }}>
+    <span className="dot" style=${online ? {} : { background: "var(--crit)" }}></span>
+    ${online ? ui.agent_online : ui.agent_offline}
+  </div>`;
+}
+
+function Sidebar({ biz, ui, view, setView, newCount, online }) {
   return html`<aside className="sidebar">
     <div className="brand">
       <div className="crest"><${Icon} d="mic" size=${24} /></div>
@@ -124,7 +136,7 @@ function Sidebar({ biz, ui, view, setView, newCount }) {
         <div>
           <div className="agent-role">${ui.agent_role}</div>
           <div className="agent-name">${biz.agent}</div>
-          <div className="agent-state"><span className="dot"></span>${ui.agent_online}</div>
+          <${AgentState} ui=${ui} online=${online} />
         </div>
       </div>
       ${biz.auth && html`<a className="signout" href="/logout">${ui.sign_out}</a>`}
@@ -163,7 +175,23 @@ function Details({ details, labels }) {
   );
 }
 
-function InboxItem({ item, biz, ui, onHandled, onViewCall }) {
+function CancelButton({ item, ui, onCancel }) {
+  // Two taps on purpose: one tap arms it ("Confirm cancellation"), the second
+  // cancels, and three idle seconds disarm it — a modal would be sturdier but
+  // heavier than this deserves, and a single tap on a phone is an accident.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return html`<button className=${"cancelbtn" + (armed ? " armed" : "")}
+    onClick=${() => (armed ? onCancel(item) : setArmed(true))}>
+    ${armed ? ui.confirm_cancel : ui.cancel_booking}
+  </button>`;
+}
+
+function InboxItem({ item, biz, ui, onHandled, onViewCall, onCancel }) {
   const kind = KIND[item.type];
   const kindLabel = { booking: ui.item_booking, cancellation: ui.item_cancellation, message: ui.item_message }[item.type];
   return html`<div className=${"item" + (item.handled ? " done" : "")}>
@@ -192,6 +220,7 @@ function InboxItem({ item, biz, ui, onHandled, onViewCall }) {
           <button className="viewcall" onClick=${() => onViewCall(item.call_id)}>
             <${Icon} d="chat" size=${14} />${ui.view_call}
           </button>`}
+        ${item.type === "booking" && html`<${CancelButton} item=${item} ui=${ui} onCancel=${onCancel} />`}
         <button className=${"check" + (item.handled ? " on" : "")}
           onClick=${() => onHandled(item, !item.handled)}>
           <${Icon} d="check" size=${15} />
@@ -202,25 +231,47 @@ function InboxItem({ item, biz, ui, onHandled, onViewCall }) {
   </div>`;
 }
 
-function Inbox({ items, biz, ui, onHandled, onViewCall }) {
+/* Does an inbox item match what the owner typed? Names and addresses match as
+ * substrings; anything with digits in it also matches against the phone with
+ * the punctuation stripped, so "415 729" finds "+14157298634". */
+function matches(item, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const hay = [
+    item.customer_name, item.phone, item.ref_code, item.topic,
+    item.resource_label, ...Object.values(item.details || {}),
+  ].filter((x) => typeof x === "string").join(" ").toLowerCase();
+  if (hay.includes(q)) return true;
+  const digits = q.replace(/\D/g, "");
+  return digits.length >= 3 && (item.phone || "").replace(/\D/g, "").includes(digits);
+}
+
+function Inbox({ items, biz, ui, onHandled, onViewCall, onCancel }) {
   const [filter, setFilter] = useState("new");
-  const fresh = items.filter((x) => !x.handled);
-  const shown = filter === "new" ? fresh : items;
+  const [query, setQuery] = useState("");
+  const found = items.filter((x) => matches(x, query));
+  const fresh = found.filter((x) => !x.handled);
+  // A search means "find it wherever it is" — it looks through everything,
+  // not through the New pile the chips happen to be on.
+  const shown = query.trim() ? found : filter === "new" ? fresh : found;
   return html`<div>
     <div className="chips">
-      <button className=${"chip" + (filter === "new" ? " active" : "")}
-        onClick=${() => setFilter("new")}>${ui.new_items}${fresh.length ? ` · ${fresh.length}` : ""}</button>
-      <button className=${"chip" + (filter === "all" ? " active" : "")}
+      <button className=${"chip" + (filter === "new" && !query.trim() ? " active" : "")}
+        onClick=${() => { setFilter("new"); setQuery(""); }}>${ui.new_items}${fresh.length ? ` · ${fresh.length}` : ""}</button>
+      <button className=${"chip" + (filter === "all" || query.trim() ? " active" : "")}
         onClick=${() => setFilter("all")}>${ui.all_items}${items.length ? ` · ${items.length}` : ""}</button>
+      <input className="search" type="search" placeholder=${ui.search_placeholder}
+        value=${query} onInput=${(e) => setQuery(e.target.value)} />
     </div>
     ${shown.length
       ? html`<div className="feed">
           ${shown.map((item) => html`<${InboxItem} key=${item.type + item.id + item.handled}
-            item=${item} biz=${biz} ui=${ui} onHandled=${onHandled} onViewCall=${onViewCall} />`)}
+            item=${item} biz=${biz} ui=${ui} onHandled=${onHandled}
+            onViewCall=${onViewCall} onCancel=${onCancel} />`)}
         </div>`
       : html`<div className="empty">
-          <${Icon} d=${items.length ? "check" : "inbox"} size=${34} />
-          <div>${items.length ? ui.all_handled : ui.inbox_empty}</div>
+          <${Icon} d=${query.trim() ? "inbox" : items.length ? "check" : "inbox"} size=${34} />
+          <div>${query.trim() ? ui.no_results : items.length ? ui.all_handled : ui.inbox_empty}</div>
         </div>`}
   </div>`;
 }
@@ -455,13 +506,16 @@ function App() {
   const [stats, setStats] = useState(null);
   const [view, setView] = useState("inbox");
   const [openCall, setOpenCall] = useState(null);
+  const [online, setOnline] = useState(true);
   const viewRef = useRef(view);
   viewRef.current = view;
 
   const refresh = useCallback(async () => {
     const inbox = await get("/api/inbox");
+    BIZ_TODAY = inbox.today || BIZ_TODAY;
     setBiz(inbox.business);
     setItems(inbox.items);
+    setOnline(inbox.agent_online !== false);
     if (viewRef.current === "calls") setCalls((await get("/api/calls")).calls);
     if (viewRef.current === "overview") setStats(await get("/api/stats"));
   }, []);
@@ -493,12 +547,21 @@ function App() {
     if (!ok) refresh().catch(() => {});
   }, [refresh]);
 
+  const onCancel = useCallback(async (item) => {
+    // NOT optimistic, unlike the checkmark: a checkmark is the owner's own
+    // note, a cancellation frees a slot other callers can immediately take.
+    // The card flips only once the database says it did.
+    const ok = await post("/api/cancel", { ref_code: item.ref_code });
+    if (!ok) alert(biz?.ui?.cancel_failed || "error");
+    refresh().catch(() => {});
+  }, [refresh, biz]);
+
   if (!biz) return null;
   const ui = biz.ui;
   const title = { inbox: ui.inbox, calls: ui.calls, overview: ui.overview }[view];
 
   return html`<div className="app">
-    <${Sidebar} biz=${biz} ui=${ui} view=${view} setView=${setView} newCount=${newCount} />
+    <${Sidebar} biz=${biz} ui=${ui} view=${view} setView=${setView} newCount=${newCount} online=${online} />
     <main className="main">
       <div className="topbar">
         <div>
@@ -506,13 +569,17 @@ function App() {
           <div className="sub">${ui.subtitle} · ${biz.brand}</div>
         </div>
         <div className="pills">
-          <div className="pill"><span className="dot"></span>
-            <span><span className="strong">${biz.agent}</span> · ${(ui.agent_online || "").toLowerCase()}</span>
+          <div className="pill">
+            <span className="dot" style=${online ? {} : { background: "var(--crit)" }}></span>
+            <span><span className="strong">${biz.agent}</span> · ${((online ? ui.agent_online : ui.agent_offline) || "").toLowerCase()}</span>
           </div>
         </div>
       </div>
+      ${!online && html`<div className="downbanner">
+        <${Icon} d="phone" size=${16} />${ui.agent_down_warning}
+      </div>`}
       ${view === "inbox" && html`<${Inbox} items=${items} biz=${biz} ui=${ui}
-        onHandled=${onHandled} onViewCall=${setOpenCall} />`}
+        onHandled=${onHandled} onViewCall=${setOpenCall} onCancel=${onCancel} />`}
       ${view === "calls" && html`<${Calls} calls=${calls} ui=${ui} onOpen=${setOpenCall} />`}
       ${view === "overview" && html`<${Overview} stats=${stats} biz=${biz} ui=${ui} />`}
     </main>

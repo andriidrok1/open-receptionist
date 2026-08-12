@@ -80,6 +80,85 @@ def test_handled_answers_404_for_an_unknown_item():
     assert r.status_code == 404
 
 
+# ------------------------------ cancel button ------------------------------
+
+
+def test_owner_cancel_flips_the_booking_and_keeps_it_out_of_the_new_pile():
+    """The owner cancelled it themselves — the cancellation must not come back
+    at them as unread news (that rule exists for CALLERS' cancellations)."""
+    from datetime import timedelta
+
+    from business import BUSINESS
+
+    start = (BUSINESS.today() + timedelta(days=55)).isoformat()
+    end = (BUSINESS.today() + timedelta(days=56)).isoformat()
+    room = BUSINESS.booking.resources[0].label
+    made = crm.create_booking(room, start, "Тарас Дашбордний", "0632096974", end)
+    assert made["success"], made
+
+    c = fresh_client()
+    c.post("/api/login", json={"password": "s3cret-test"})
+    r = c.post("/api/cancel", json={"ref_code": made["ref_code"]})
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+    item = next(x for x in crm.inbox() if x.get("ref_code") == made["ref_code"])
+    assert item["type"] == "cancellation"
+    assert item["handled"] is True
+
+    # Cancelling twice is a conflict, not a success.
+    assert c.post("/api/cancel", json={"ref_code": made["ref_code"]}).status_code == 409
+
+
+def test_cancel_of_an_unknown_ref_is_a_conflict_not_a_crash():
+    c = fresh_client()
+    c.post("/api/login", json={"password": "s3cret-test"})
+    r = c.post("/api/cancel", json={"ref_code": "JOB-0000"})
+    assert r.status_code == 409
+    assert r.json()["error"]
+
+
+def test_cancel_is_locked_without_a_session():
+    r = fresh_client().post("/api/cancel", json={"ref_code": "JOB-0000"})
+    assert r.status_code == 401
+
+
+# ------------------------------ agent health ------------------------------
+
+
+def test_agent_health_is_measured_not_painted(monkeypatch):
+    """The old dashboard drew a green dot unconditionally; this one must
+    report what is actually listening on the bot's port."""
+    import asyncio
+    import socket
+
+    # Nothing listens here: a bound-then-closed port is free by definition.
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    free_port = probe.getsockname()[1]
+    probe.close()
+
+    monkeypatch.setattr(dashboard, "BOT_PORT", free_port)
+    dashboard._health["at"] = 0.0  # the cache must not serve a stale verdict
+    assert asyncio.run(dashboard._agent_online()) is False
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    monkeypatch.setattr(dashboard, "BOT_PORT", listener.getsockname()[1])
+    dashboard._health["at"] = 0.0
+    assert asyncio.run(dashboard._agent_online()) is True
+    listener.close()
+
+
+def test_inbox_payload_carries_health_and_the_business_today():
+    c = fresh_client()
+    c.post("/api/login", json={"password": "s3cret-test"})
+    dashboard._health["at"] = 0.0
+    data = c.get("/api/inbox").json()
+    assert data["agent_online"] in (True, False)
+    assert len(data["today"]) == 10  # YYYY-MM-DD, in the business's zone
+
+
 # ------------------------------ no password ------------------------------
 #
 # _is_owner is tested directly here: TestClient stamps every request as coming

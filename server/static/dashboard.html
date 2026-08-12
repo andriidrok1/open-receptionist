@@ -122,8 +122,30 @@
   .pill .strong { color: var(--ink); font-weight: 600; }
   @media (max-width: 720px) { .pills { display: none; } }
 
+  /* ---------- Agent-down banner ---------- */
+  .downbanner {
+    margin-top: 16px; background: var(--crit-soft); color: var(--crit);
+    border: 1px solid #f4c4c3; border-radius: 13px; padding: 12px 16px;
+    font-weight: 600; display: flex; align-items: center; gap: 10px;
+    max-width: 760px;
+  }
+  .downbanner svg { stroke: currentColor; flex: none; }
+
   /* ---------- Inbox ---------- */
-  .chips { display: flex; gap: 8px; margin: 18px 0 14px; }
+  .chips { display: flex; gap: 8px; margin: 18px 0 14px; flex-wrap: wrap; }
+  .search {
+    flex: 1; min-width: 170px; max-width: 320px; border: 1px solid var(--hair);
+    border-radius: 999px; padding: 7px 16px; font-size: 13px; font-family: inherit;
+    background: var(--surface); color: var(--ink); outline: none;
+  }
+  .search:focus { border-color: var(--primary); }
+  .cancelbtn {
+    border: 1.5px solid var(--hair); background: var(--surface); color: var(--muted);
+    border-radius: 10px; padding: 8px 14px; font-weight: 600; font-size: 12.5px;
+    cursor: pointer; transition: all .15s; flex: none; font-family: inherit;
+  }
+  .cancelbtn:hover { border-color: var(--crit); color: var(--crit); }
+  .cancelbtn.armed { background: var(--crit); border-color: var(--crit); color: #fff; }
   .chip {
     border: 1px solid var(--hair); background: var(--surface); color: var(--ink-2);
     border-radius: 999px; padding: 7px 16px; font-weight: 600; font-size: 13px;
