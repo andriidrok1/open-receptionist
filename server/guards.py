@@ -35,12 +35,81 @@ _heard_digits: list[str] = []
 #: actually issued, and when a call has several the newest is the one being
 #: talked about.
 _issued_refs: list[str] = []
+#: Which tools have been called this call. Ground truth for the state line:
+#: "has availability ever been checked" must come from here, not from the
+#: model's own belief about what it has done.
+_tools_called: set[str] = set()
+#: Everything the agent has said so far, lowered. Ground truth for "has the
+#: fee been stated" — again a fact about the call, not a memory.
+_agent_text: list[str] = []
 
 
 def reset() -> None:
     """Start a new call."""
     _heard_digits.clear()
     _issued_refs.clear()
+    _tools_called.clear()
+    _agent_text.clear()
+    _failures.clear()
+
+
+#: Identical failing tool calls, counted. (name, args, error) → how many times.
+_failures: dict[tuple, int] = {}
+
+
+def note_tool(name: str) -> None:
+    """A tool the model actually called (successfully or not)."""
+    if name:
+        _tools_called.add(name)
+
+
+def note_failure(name: str, args: dict, error: str) -> int:
+    """Count an identical failure: same tool, same arguments, same error.
+
+    Found by the fragmented-speech tactic: given an eleven-digit number the
+    store kept refusing as too long, the agent asked for it again and called
+    create_booking with THE SAME digits six times running. The input was never
+    going to change, and neither was the answer. The count lets the error
+    message itself change on the third round — from "ask again" to "stop
+    asking; offer a callback instead".
+    """
+    key = (name, repr(sorted((args or {}).items())), error)
+    _failures[key] = _failures.get(key, 0) + 1
+    return _failures[key]
+
+
+def tool_was_called(name: str) -> bool:
+    return name in _tools_called
+
+
+def note_agent_text(text: str) -> None:
+    """A reply the caller actually heard."""
+    if text:
+        _agent_text.append(text.lower())
+
+
+def agent_said(words) -> bool:
+    """Whether any of these words has come out of the agent's mouth."""
+    said = " ".join(_agent_text)
+    return any(str(w).lower() in said for w in words)
+
+
+#: Spoken forms of the amounts a config is likely to use as a visit fee.
+#: The digits always match ("99" appears in "$99"); this covers the agent
+#: saying it the way the prompt tells it to — in words.
+_SPOKEN_AMOUNTS = {
+    49: ("forty-nine", "forty nine"), 59: ("fifty-nine", "fifty nine"),
+    69: ("sixty-nine", "sixty nine"), 79: ("seventy-nine", "seventy nine"),
+    89: ("eighty-nine", "eighty nine"), 99: ("ninety-nine", "ninety nine"),
+    100: ("hundred",), 125: ("one twenty-five", "one twenty five"),
+    149: ("one forty-nine", "one forty nine"), 150: ("one fifty",),
+    199: ("one ninety-nine", "one ninety nine"),
+}
+
+
+def amount_words(amount: int) -> tuple[str, ...]:
+    """How this amount might be said out loud: "99", "ninety-nine"."""
+    return (str(amount),) + _SPOKEN_AMOUNTS.get(amount, ())
 
 
 def hear(text: str, digit_words: dict[str, str] | None = None) -> None:
@@ -142,3 +211,119 @@ def is_goodbye(text: str, words: tuple[str, ...]) -> bool:
     """Whether this reply is the agent signing off."""
     low = (text or "").lower()
     return any(w in low for w in words)
+
+
+# ------------------------- phone digits in a reply -------------------------
+#
+# Found on the first live human call: in the final recap the agent read the
+# phone number back with a digit missing — "four one five five two eight four
+# one five", nine digits of the caller's ten. The prompt forbids repeating the
+# number in the recap at all, and that held exactly as well as prompts hold.
+# A model copying digits through text drops one often enough to matter, so the
+# copy is checked against the ledger of what the caller actually said, and
+# snapped back to it before synthesis.
+
+#: Separators inside a spoken digit run: spaces, commas, dashes, pause tags.
+_RUN_SEP = r"(?:[,\s–—-]|<break[^>]*/>)+"
+
+
+def _run_regex(digit_words: dict[str, str]) -> re.Pattern:
+    words = sorted(digit_words, key=len, reverse=True)
+    alt = "|".join(re.escape(w) for w in words)
+    return re.compile(
+        rf"\b(?:{alt})\b(?:{_RUN_SEP}(?:{alt})\b)*", re.IGNORECASE
+    )
+
+
+def _decode(run: str, digit_words: dict[str, str]) -> str:
+    out = []
+    for token in re.findall(r"[^\s,<>/=\"'-]+", run.lower()):
+        if token in digit_words:
+            out.append(digit_words[token])
+    return "".join(out)
+
+
+def _render(digits: str, digit_words: dict[str, str]) -> str:
+    """Digits back into words, grouped the way the prompt reads numbers.
+
+    "oh" for zero when the pack knows it — that is how the prompt tells the
+    agent to say it, and the repair should not stick out of the sentence.
+    """
+    word_of = {}
+    for word, digit in digit_words.items():
+        word_of.setdefault(digit, word)
+    if "0" in word_of and digit_words.get("oh") == "0":
+        word_of["0"] = "oh"
+    groups = (
+        [digits[:3], digits[3:6], digits[6:]]
+        if len(digits) == 10
+        else [digits[i:i + 3] for i in range(0, len(digits), 3)]
+    )
+    spoken = [" ".join(word_of.get(d, d) for d in g) for g in groups if g]
+    return ' <break time="0.4s" /> '.join(spoken)
+
+
+def correct_phone(
+    text: str, digit_words: dict[str, str], phone_len: int | None
+) -> tuple[str, list[str]]:
+    """Snap phone-length digit runs in a reply back to what the caller said.
+
+    Only runs of seven digits or more are touched — dates, times and prices
+    are said as number words ("ninety-nine"), not digit by digit, so they
+    never look like this.
+
+    Three cases:
+      * the run matches a full-length stretch of the heard ledger — correct,
+        leave it;
+      * it is a mangled copy of something the caller said (a digit dropped or
+        doubled) — replace it with the best-overlapping full-length stretch;
+      * nothing similar was ever heard — there is nothing true to say, so the
+        run is removed rather than repaired into a better-dressed lie.
+
+    Returns (text, list of runs that were changed).
+    """
+    if not text or not digit_words:
+        return text, []
+    heard = "".join(_heard_digits)
+    changed: list[str] = []
+
+    def windows() -> list[str]:
+        if not phone_len or len(heard) < phone_len:
+            return []
+        return [heard[i:i + phone_len] for i in range(len(heard) - phone_len + 1)]
+
+    def best_window(run: str) -> str | None:
+        # The most recent window sharing the longest run of digits — people
+        # correct themselves, and the number being talked about is the last.
+        cands = windows()
+        best, best_len = None, 0
+        for w in cands:
+            k = _overlap(run, w)
+            if k >= best_len:  # >= : later windows win ties
+                best, best_len = w, k
+        return best if best_len >= min(5, len(run)) else None
+
+    def fix(match: re.Match) -> str:
+        run = match.group(0)
+        digits = _decode(run, digit_words)
+        if len(digits) < 7:
+            return run
+        if digits in heard and (not phone_len or len(digits) == phone_len):
+            return run
+        good = best_window(digits)
+        changed.append(digits)
+        return _render(good, digit_words) if good else ""
+
+    return _run_regex(digit_words).sub(fix, text), changed
+
+
+def _overlap(a: str, b: str) -> int:
+    """Length of the longest common substring — cheap, the strings are tiny."""
+    best = 0
+    for i in range(len(a)):
+        for j in range(len(b)):
+            k = 0
+            while i + k < len(a) and j + k < len(b) and a[i + k] == b[j + k]:
+                k += 1
+            best = max(best, k)
+    return best

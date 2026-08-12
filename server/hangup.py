@@ -32,6 +32,7 @@ from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     EndWorkerFrame,
     Frame,
+    LLMContextFrame,
     TextFrame,
     UserStartedSpeakingFrame,
 )
@@ -101,9 +102,17 @@ class ClaimGuard(FrameProcessor):
     that disagrees with the audio is how these bugs stay invisible for weeks.
     """
 
-    def __init__(self, retract_line: str, **kwargs):
+    def __init__(
+        self,
+        retract_line: str,
+        digit_words: dict[str, str] | None = None,
+        phone_len: int | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self._retract = retract_line
+        self._digit_words = dict(digit_words or {})
+        self._phone_len = phone_len
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -118,6 +127,18 @@ class ClaimGuard(FrameProcessor):
             elif changed:
                 logger.warning(f"[claim] invented reference {changed} → the real one")
                 frame = TextFrame(fixed)
+            # Digit-by-digit numbers are checked against what the caller said:
+            # the first live human call ended with a recap that read the phone
+            # back with a digit missing. Runs after the ref repair — the
+            # retraction line carries no digits, so the order is safe either
+            # way.
+            if self._digit_words:
+                fixed, runs = guards.correct_phone(
+                    frame.text, self._digit_words, self._phone_len
+                )
+                if runs:
+                    logger.warning(f"[claim] mangled phone read-back {runs} → as heard")
+                    frame = TextFrame(fixed)
         await self.push_frame(frame, direction)
 
 
@@ -204,6 +225,68 @@ class CallEnder(FrameProcessor):
 
         if self._reason and isinstance(frame, BotStoppedSpeakingFrame):
             await self._end()
+
+
+def call_state_line(book, pack, currency: str) -> str:
+    """What the model has NOT done yet this call, as one short reminder.
+
+    Written from ground truth — the guards ledger of tools actually called and
+    words actually spoken — never from the model's own account of itself.
+
+    Why this exists: on the first live human call the model went three minutes
+    and fourteen replies without calling a single tool. It offered "tonight at
+    six" and "tomorrow at nine" out of thin air and never once said the visit
+    fee. The system prompt demands both, from four thousand tokens away, past
+    a conversation full of fragmented half-turns. The casebook never caught it
+    because a model playing the caller speaks in clean full sentences.
+
+    A reminder computed in code and injected next to the LAST message is the
+    cheapest structural fix: it sits where attention actually lands, it names
+    only what is still missing, and it disappears item by item as the facts
+    change. It is still a prompt — but one that cannot rot, because it is
+    regenerated from the ledger every turn.
+    """
+    parts = []
+    if book.enabled and book.resources and not guards.tool_was_called("check_availability"):
+        parts.append(pack.text("prompt.state.no_availability"))
+    fee = next((r.price for r in book.resources if r.price), 0)
+    if (
+        book.announce_price
+        and fee
+        and not guards.agent_said(guards.amount_words(fee))
+    ):
+        parts.append(pack.text("prompt.state.fee_unsaid", currency=currency, fee=fee))
+    return " ".join(parts)
+
+
+class StateNudge(FrameProcessor):
+    """Keeps one up-to-date state reminder at the tail of the LLM context.
+
+    Sits between the user aggregator and the LLM, where the assembled context
+    passes on its way to inference. Each time, the previous reminder (if any)
+    is removed and a fresh one appended — so the model always sees the current
+    state exactly once, next to the newest message, and sees nothing at all
+    once every obligation is met.
+    """
+
+    def __init__(self, context, line_fn, **kwargs):
+        super().__init__(**kwargs)
+        self._context = context
+        self._line_fn = line_fn
+        self._last_msg: dict | None = None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, LLMContextFrame):
+            messages = self._context._messages
+            if self._last_msg is not None and self._last_msg in messages:
+                messages.remove(self._last_msg)
+                self._last_msg = None
+            line = self._line_fn()
+            if line:
+                self._last_msg = {"role": "developer", "content": line}
+                self._context.add_message(self._last_msg)
+        await self.push_frame(frame, direction)
 
 
 class IdleWatch(FrameProcessor):

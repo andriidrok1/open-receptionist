@@ -217,6 +217,9 @@ def call_tool(name: str, args: dict) -> dict:
     event log already swallows its own errors for exactly this reason, and the
     booking path had no such guard.
     """
+    # Ground truth for the per-turn state reminder: which tools have actually
+    # been called, as opposed to which the model believes it has called.
+    guards.note_tool(name)
     # A phone number the caller never said is refused before it reaches the
     # store. Found by the casebook: given a number the store rejected, the agent
     # invented three more and tried each one, rather than asking again. The
@@ -232,6 +235,14 @@ def call_tool(name: str, args: dict) -> dict:
     # Only a code that was really issued may be spoken; see guards.fabricated_refs.
     if isinstance(result, dict) and result.get("ref_code"):
         guards.remember_ref(result["ref_code"])
+    # The same call with the same arguments failing the same way, again: after
+    # the third round the error stops saying "ask again" and says "stop". The
+    # fragmented-speech tactic caught the agent re-submitting an unusable
+    # number six times — the input was never going to change, and neither was
+    # the answer, and the caller was stuck in the loop with it.
+    if isinstance(result, dict) and result.get("error"):
+        if guards.note_failure(name, args, str(result["error"])) >= 3:
+            result = {**result, "error": L.text("errors.giving_up")}
     return result
 
 

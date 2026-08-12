@@ -130,6 +130,11 @@ class TranscriptCollector(FrameProcessor):
                 guards.hear(frame.text, self._digit_words)
         elif isinstance(frame, AggregatedTextFrame) and not isinstance(frame, TTSTextFrame):
             self._recorder.add("agent", frame.text)
+            # The other half of the guards ledger: what the agent has said,
+            # for facts like "has the fee been stated yet". This collector
+            # sits after ClaimGuard, so it records the repaired reply — the
+            # one the caller actually heard.
+            guards.note_agent_text(frame.text)
 
         await self.push_frame(frame, direction)
 

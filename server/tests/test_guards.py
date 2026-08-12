@@ -269,3 +269,134 @@ def test_every_language_can_say_goodbye_and_count(lang):
         f"{lang}: digit_words does not cover every digit, so a number said out loud "
         "cannot be matched against one the agent tries to book with"
     )
+
+
+# --------------------------- phone digits in a reply --------------------------
+#
+# Found on the first live human call: the final recap read the caller's number
+# back with a digit missing — "four one five five two eight four one five",
+# nine of ten. The prompt forbids repeating the number in the recap, which held
+# as well as prompts hold, so the copy is now checked against the ledger.
+
+
+def _heard_a_number():
+    guards.hear("my number is +1 415 528 4151", EN_DIGITS)
+
+
+def test_a_truncated_read_back_is_completed():
+    _heard_a_number()
+    text = ("That's Andrew, four one five five two eight four one five. "
+            "That right?")
+    fixed, changed = guards.correct_phone(text, EN_DIGITS, 10)
+    assert changed == ["415528415"]
+    assert "four one five" in fixed
+    # The missing final digit is restored from what the caller actually said.
+    assert "four one five one" in fixed.replace('<break time="0.4s" />', " ").replace("  ", " ")
+
+
+def test_a_correct_read_back_is_left_alone():
+    _heard_a_number()
+    text = ('So that\'s four one five <break time="0.4s" /> five two eight '
+            '<break time="0.4s" /> four one five one. Did I get that right?')
+    fixed, changed = guards.correct_phone(text, EN_DIGITS, 10)
+    assert changed == []
+    assert fixed == text
+
+
+def test_an_invented_number_nobody_said_is_removed():
+    guards.hear("I'd rather not give a number", EN_DIGITS)
+    text = "I'll put you down as five five five one two three four five six seven."
+    fixed, changed = guards.correct_phone(text, EN_DIGITS, 10)
+    assert changed == ["5551234567"]
+    assert "five five five" not in fixed
+
+
+def test_prices_and_times_are_not_phone_numbers():
+    _heard_a_number()
+    text = "Ninety-nine for the visit, tomorrow at nine. One moment."
+    fixed, changed = guards.correct_phone(text, EN_DIGITS, 10)
+    assert changed == []
+    assert fixed == text
+
+
+def test_the_empty_ledger_does_not_invent_a_replacement():
+    """Nothing heard, nothing true to substitute: the run is dropped, not
+    dressed up."""
+    text = "Your number is four one five five five five one two three four."
+    fixed, changed = guards.correct_phone(text, EN_DIGITS, 10)
+    assert changed == ["4155551234"]
+    assert "four" not in fixed
+
+
+# ------------------------------- the call state -------------------------------
+
+
+def test_reset_clears_the_state_ledger():
+    guards.note_tool("check_availability")
+    guards.note_agent_text("Ninety-nine for the visit.")
+    guards.reset()
+    assert guards.tool_was_called("check_availability") is False
+    assert guards.agent_said(("ninety-nine",)) is False
+
+
+def test_the_state_line_names_what_is_missing():
+    from business import load_business
+    from hangup import call_state_line
+    from locale_pack import load_locale as _ll
+
+    biz = load_business("emergency_us")
+    pack = _ll("en")
+    line = call_state_line(biz.booking, pack, "$")
+    assert "check_availability" in line
+    assert "99" in line
+
+
+def test_the_state_line_empties_as_facts_change():
+    from business import load_business
+    from hangup import call_state_line
+    from locale_pack import load_locale as _ll
+
+    biz = load_business("emergency_us")
+    pack = _ll("en")
+    guards.note_tool("check_availability")
+    guards.note_agent_text("It's ninety-nine for the visit, no overtime charge.")
+    assert call_state_line(biz.booking, pack, "$") == ""
+
+
+def test_a_business_without_the_flag_is_not_nagged_about_price():
+    from business import load_business
+    from hangup import call_state_line
+    from locale_pack import load_locale as _ll
+
+    biz = load_business("dental_us")
+    guards.note_tool("check_availability")
+    line = call_state_line(biz.booking, _ll("en"), "$")
+    assert line == ""
+
+
+# ------------------------------ the dead-end loop ------------------------------
+
+
+def test_the_third_identical_failure_changes_the_answer():
+    """Same tool, same arguments, same error, three times: the error must stop
+    saying "ask again". Caught live: an unusable eleven-digit number was
+    re-submitted six times, and the caller was trapped in the loop."""
+    args = {"phone": "07983227651", "customer_name": "X"}
+    assert guards.note_failure("create_booking", args, "too long") == 1
+    assert guards.note_failure("create_booking", args, "too long") == 2
+    assert guards.note_failure("create_booking", args, "too long") == 3
+
+
+def test_different_arguments_are_a_fresh_attempt():
+    """A corrected number is progress, not repetition — it must not inherit
+    the old count, or the give-up line fires on a caller who just fixed
+    their mistake."""
+    guards.note_failure("create_booking", {"phone": "111"}, "too long")
+    guards.note_failure("create_booking", {"phone": "111"}, "too long")
+    assert guards.note_failure("create_booking", {"phone": "222"}, "too long") == 1
+
+
+def test_reset_clears_the_failure_count():
+    guards.note_failure("create_booking", {"phone": "111"}, "too long")
+    guards.reset()
+    assert guards.note_failure("create_booking", {"phone": "111"}, "too long") == 1

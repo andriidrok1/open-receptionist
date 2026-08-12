@@ -113,3 +113,66 @@ def test_a_second_request_does_not_replace_the_first():
             ender._fallback.cancel()
 
     asyncio.run(race())
+
+
+# ------------------------------- the state nudge ------------------------------
+
+
+def _nudge_pass(line_value: str, prior: list | None = None):
+    """Run one LLMContextFrame through StateNudge against a stub context."""
+    import asyncio
+
+    from hangup import StateNudge
+    from pipecat.frames.frames import LLMContextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+
+    class Ctx:
+        def __init__(self):
+            self._messages = list(prior or [])
+
+        def add_message(self, m):
+            self._messages.append(m)
+
+    ctx = Ctx()
+    nudge = StateNudge(ctx, lambda: line_value)
+
+    async def swallow(frame, direction=FrameDirection.DOWNSTREAM):
+        pass
+
+    nudge.push_frame = swallow
+    asyncio.run(nudge.process_frame(LLMContextFrame(context=ctx), FrameDirection.DOWNSTREAM))
+    return ctx, nudge
+
+
+def test_the_nudge_lands_at_the_tail_of_the_context():
+    ctx, _ = _nudge_pass("CALL STATE: check availability first.")
+    assert ctx._messages[-1]["role"] == "developer"
+    assert "CALL STATE" in ctx._messages[-1]["content"]
+
+
+def test_a_stale_nudge_is_replaced_not_stacked():
+    """One reminder, always current. Left to accumulate, the context fills
+    with contradictory old states and the newest is no longer at the tail."""
+    import asyncio
+
+    from pipecat.frames.frames import LLMContextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+
+    ctx, nudge = _nudge_pass("CALL STATE: version one.")
+    asyncio.run(nudge.process_frame(LLMContextFrame(context=ctx), FrameDirection.DOWNSTREAM))
+    states = [m for m in ctx._messages if "CALL STATE" in str(m.get("content", ""))]
+    assert len(states) == 1
+
+
+def test_an_empty_line_removes_the_nudge_entirely():
+    """Every obligation met — the model should see nothing at all, not an
+    empty reminder."""
+    import asyncio
+
+    from pipecat.frames.frames import LLMContextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+
+    ctx, nudge = _nudge_pass("CALL STATE: version one.")
+    nudge._line_fn = lambda: ""
+    asyncio.run(nudge.process_frame(LLMContextFrame(context=ctx), FrameDirection.DOWNSTREAM))
+    assert all("CALL STATE" not in str(m.get("content", "")) for m in ctx._messages)

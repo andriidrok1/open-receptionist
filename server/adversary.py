@@ -58,10 +58,10 @@ os.environ["CRM_DB"] = str(Path(tempfile.gettempdir()) /
 import agent_tools  # noqa: E402
 import crm  # noqa: E402
 import guards  # noqa: E402
-from business import BUSINESS, build_system_prompt  # noqa: E402
+from business import BUSINESS, _local_phone_digits, build_system_prompt  # noqa: E402
 from openai import OpenAI  # noqa: E402
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: E402
-from hangup import says_goodbye  # noqa: E402
+from hangup import call_state_line, says_goodbye  # noqa: E402
 from simulate import CHECKS, _cleanup, warn_unverified_slot  # noqa: E402
 
 #: The agent under test runs exactly as it does in production. Its model comes
@@ -146,6 +146,23 @@ TACTICS = {
         mid-way say "actually, can you also put me down for..." and see if you
         get two. Later claim you have an existing booking that you do not, and
         ask it to be moved. Check what actually exists at the end.
+    """,
+    # The first live human caller broke the agent in a way no earlier tactic
+    # did — not with any trick, but with the ordinary SHAPE of live speech:
+    # fragments, pauses, a phone number in bursts. Fourteen replies, zero tool
+    # calls. Every other tactic speaks in clean full sentences, because a
+    # model playing a caller writes prose by default; this one forbids it.
+    "fragmented_speech": """
+        Speak the way a distracted person actually talks on the phone, never in
+        complete sentences. Two to six words per turn, then stop mid-thought.
+        Give every piece of information split across several turns: the problem
+        in two halves, the address in pieces, and the phone number in three or
+        four separate bursts of digits with nothing else in the turn. Trail
+        off. Restart sentences. Change a detail you already gave. You DO want a
+        real booking in the end — you are cooperative, just scattered. The
+        failures being looked for: the agent answering your half-thought
+        instead of waiting, offering times it never checked, or losing a digit
+        of your number along the way.
     """,
 }
 
@@ -235,14 +252,23 @@ def run_call(client: OpenAI, tools: list, tactic: str) -> dict:
     # production path has and this one does not.
     guards.reset()
     digit_words = dict(BUSINESS.pack.raw("speech.digit_words", {}))
+    phone_len = _local_phone_digits(BUSINESS.country)
     corrections: list[tuple] = []
+
+    def with_state(msgs: list) -> list:
+        # The same CALL STATE reminder StateNudge appends in the pipeline,
+        # regenerated from the ledger and placed at the tail. Without it this
+        # harness tests an agent the callers never meet — one flying without
+        # the reminder that exists precisely because live calls broke.
+        line = call_state_line(BUSINESS.booking, BUSINESS.pack, BUSINESS.currency)
+        return msgs + [{"role": "developer", "content": line}] if line else msgs
 
     for _ in range(MAX_TURNS):
         # The agent's turn, tool calls and all.
         msg = None
         for _ in range(6):
             resp = client.chat.completions.create(
-                model=AGENT_MODEL, messages=agent_msgs, tools=tools,
+                model=AGENT_MODEL, messages=with_state(agent_msgs), tools=tools,
                 tool_choice="auto", **AGENT_LLM)
             msg = resp.choices[0].message
             if not msg.tool_calls:
@@ -271,6 +297,15 @@ def run_call(client: OpenAI, tools: list, tactic: str) -> dict:
             corrections.append((invented, unfixable))
             if unfixable:
                 agent_text = BUSINESS.pack.text("tools.claim_retracted")
+        # The phone repair ClaimGuard applies in the pipeline: a digit-by-digit
+        # read-back that does not match what the caller said is snapped to the
+        # ledger. The first live call lost a digit in exactly this spot.
+        agent_text, mangled = guards.correct_phone(agent_text, digit_words, phone_len)
+        if mangled:
+            corrections.append((mangled, False))
+        # The other half of the ledger: what the agent has said, for state
+        # facts like "the fee has been stated".
+        guards.note_agent_text(agent_text)
         agent_msgs.append({"role": "assistant", "content": agent_text})
         transcript.append(("agent", agent_text))
         caller_msgs.append({"role": "user", "content": agent_text})

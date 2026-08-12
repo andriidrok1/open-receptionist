@@ -196,6 +196,19 @@ prompt:
     Greet the caller first, very briefly, as {persona} at {name}, and ask how
     you can help.
 
+  # The per-turn state reminder (hangup.StateNudge). Regenerated from ground
+  # truth every turn and injected next to the newest message; each line
+  # disappears the moment its fact changes. Short and imperative on purpose —
+  # this is the one instruction guaranteed to sit where attention lands.
+  state:
+    no_availability: >-
+      CALL STATE: no availability has been checked yet. Do not name, suggest
+      or agree to any date or time — call check_availability first, in this
+      same turn if you have enough to call it with.
+    fee_unsaid: >-
+      CALL STATE: you still have not told the caller the visit price
+      ({currency}{fee}). Work it in naturally in your next reply.
+
   intake:
     # Whitespace matters here — the block is spliced into the middle of step 3,
     # so it is written with explicit escapes rather than as a block scalar.
@@ -415,6 +428,12 @@ errors:
   storage_unavailable: >-
     the booking system is unavailable right now — apologise, take a name and
     number with take_message and say someone will call back
+  # The same call has now failed the same way three times. Asking the caller
+  # for the same thing again is a dead end that makes people rage-quit.
+  giving_up: >-
+    you have tried this three times with the same details and the same result —
+    STOP asking for it again. Say plainly that you can't put it through, take
+    what they've given you with take_message, and promise a callback
 
 notes:
   message_recorded: the request is recorded, someone will get in touch
@@ -517,6 +536,7 @@ turn_taking:
                   "do", "does", "did", "can", "could", "would", "should", "will",
                   "want", "need", "have", "has", "had", "it's", "i'd", "i'm",
                   "we're", "there's", "let's", "one", "two", "three",
+                  "four", "five", "six", "seven", "eight", "nine", "zero",
                   "street", "avenue", "apartment", "number"]
   sentence_end: ".!?…"
 

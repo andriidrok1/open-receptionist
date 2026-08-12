@@ -151,6 +151,11 @@ class BookingConfig:
     #: slot underneath stays exact for the capacity math, only the words
     #: change. See crm._spoken.
     arrival_window_min: int = 0
+    #: Whether the price must be stated early, unprompted. Drives the runtime
+    #: state reminder (hangup.call_state_line): on the first live human call
+    #: the agent went the whole three minutes without ever saying the fee,
+    #: with the instruction sitting in the knowledge block the entire time.
+    announce_price: bool = False
     horizon_days: int = 365
     hours: dict[str, str | None] = field(default_factory=dict)
     resources: tuple[Resource, ...] = ()
@@ -414,6 +419,7 @@ def load_business(key: str | None = None) -> Business:
         ref_prefix=b.get("ref_prefix", dflt["ref_prefix"]),
         slot_step_min=int(b.get("slot_step_min", 30)),
         arrival_window_min=int(b.get("arrival_window_min", 0) or 0),
+        announce_price=bool(b.get("announce_price", False)),
         horizon_days=int(b.get("horizon_days", 365)),
         hours={k: b.get("hours", {}).get(k) for k in WEEKDAYS} if b.get("hours") else {},
         resources=_resources(b.get("resources")),

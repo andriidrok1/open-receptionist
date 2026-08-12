@@ -37,10 +37,11 @@ import aiohttp
 
 import agent_tools
 import crm
-from business import BUSINESS, L, build_system_prompt, greeting_hint
+import guards
+from business import BUSINESS, L, _local_phone_digits, build_system_prompt, greeting_hint
 from call_metrics import CallMetrics, format_report
 from recording import CallRecorder, TranscriptCollector
-from hangup import CallEnder, ClaimGuard, GoodbyeWatch, IdleWatch
+from hangup import CallEnder, ClaimGuard, GoodbyeWatch, IdleWatch, StateNudge, call_state_line
 from turn_taking import SemanticSpeechTimeoutStrategy
 from dotenv import load_dotenv
 from loguru import logger
@@ -176,6 +177,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         f"[{BUSINESS.language}/{BUSINESS.country}, {BUSINESS.tz}]"
     )
     crm.init_db()
+    # One ledger per call. Without this the digits and reference codes of the
+    # PREVIOUS caller survive into the next call served by the same process —
+    # so a booking could be written against a number the current caller never
+    # said, because the last one did.
+    guards.reset()
 
     api_key = os.getenv("OPENAI_API_KEY")
     elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
@@ -514,6 +520,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # pass it on, so anything downstream never sees what the caller said.
             TranscriptCollector(recorder, side="caller"),
             user_aggregator,
+            # Between the aggregator and the LLM: keeps one fresh CALL STATE
+            # line at the tail of the context — "no availability checked yet",
+            # "the fee has not been said" — computed from the guards ledger,
+            # never from the model's beliefs. Born of the first live human
+            # call: three minutes, fourteen replies, zero tool calls, no fee.
+            StateNudge(
+                context,
+                lambda: call_state_line(BUSINESS.booking, L, BUSINESS.currency),
+            ),
             llm,
             *([WholeReplyAggregator(**key_words)] if whole_reply else []),
             # Before the TTS, for the same reason on the other side: the TTS
@@ -523,7 +538,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # reply, and the recording has to be of what the caller heard. A
             # transcript that disagrees with the audio is how a fabricated
             # confirmation survives a review.
-            ClaimGuard(L.text("tools.claim_retracted")),
+            ClaimGuard(
+                L.text("tools.claim_retracted"),
+                # For snapping a mangled phone read-back to what was heard:
+                # the first live recap dropped a digit from the number.
+                digit_words=dict(L.raw("speech.digit_words", {})),
+                phone_len=_local_phone_digits(BUSINESS.country),
+            ),
             TranscriptCollector(recorder, side="agent"),
             # Reads the assembled reply and hangs up when it is a sign-off. Must
             # sit after the aggregator (so it sees a whole reply, not the first

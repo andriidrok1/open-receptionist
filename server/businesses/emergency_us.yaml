@@ -169,6 +169,10 @@ booking:
   # unanimous that windows are what gets quoted, because traffic makes the
   # minute a fiction and a missed minute is a one-star review.
   arrival_window_min: 60
+  # The $99 must be said early, unprompted — and the knowledge block demanding
+  # it was not enough: the first live caller heard three minutes of booking
+  # talk and no price. This drives the per-turn CALL STATE reminder instead.
+  announce_price: true
   horizon_days: 7
   # Round the clock: an emergency does not consult the opening hours.
   hours:

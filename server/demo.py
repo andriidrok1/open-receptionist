@@ -33,8 +33,9 @@ STATIC = HERE / "static"
 #: dental practice concludes the project is not for them, and closes the tab.
 DEFAULT_UI_LANGUAGE = os.getenv("DEMO_LANGUAGE", "en")
 
-#: Tab order = the order of this list. The first one opens by default.
-DEMO_BUSINESSES = ["dental_us", "clinic", "emergency", "cleaning", "hotel", "barbershop"]
+#: Tab order = the order of this list. The first one opens by default —
+#: emergency_us is the flagship vertical, so it goes first.
+DEMO_BUSINESSES = ["emergency_us", "dental_us", "clinic", "emergency", "cleaning", "hotel", "barbershop"]
 
 #: Synthesis models the demo can be called on, first one the default.
 #:

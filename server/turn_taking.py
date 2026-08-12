@@ -52,7 +52,21 @@ def classify_ending(text: str, continuations: set[str], sentence_end: str) -> st
     if not words:
         return "unsure"
 
-    last = words[-1].strip(sentence_end + ",;:—-–\"«»()")
+    raw_last = words[-1]
+    last = raw_last.strip(sentence_end + ",;:—-–\"«»()")
+
+    # Digits at the end of a SHORT utterance are dictation, not an ending.
+    # A live caller reads a phone number in bursts — "415-", "528-", "4151." —
+    # and the STT dutifully punctuates each burst, so the plain rules below
+    # would close the turn mid-number (measured: six exchanges to collect one
+    # phone number, the agent answering between the caller's chunks). Length-
+    # gated so that a full sentence that happens to end in a time ("can you
+    # come at 6:30?") is still closed by its question mark.
+    if any(c.isdigit() for c in last) and (
+        raw_last.rstrip(sentence_end).endswith(("-", "–")) or len(words) <= 4
+    ):
+        return "unfinished"
+
     if last in continuations:
         return "unfinished"
     if stripped[-1] in sentence_end:
