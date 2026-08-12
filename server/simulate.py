@@ -225,7 +225,12 @@ def check_no_fabricated_data(run) -> list[str]:
         if phone and phone not in said_digits and national not in said_digits:
             bad.append(f"{name}: phone {phone} was never given by the caller")
         for field in [f.key for f in BOOK.intake] + ["customer_name"]:
-            val = (args.get(field) or "").strip()
+            raw_val = args.get(field)
+            # A typed bool intake answer (adult_present) is a yes/no, not a
+            # detail that can be fabricated word by word — nothing to check.
+            if isinstance(raw_val, bool):
+                continue
+            val = str(raw_val or "").strip()
             if not val:
                 continue
             missing = _unspoken_parts(val, said, said_digits)

@@ -120,6 +120,32 @@ def test_a_street_with_no_city_is_retried_with_the_service_area(monkeypatch):
     assert asked == ["1200 Irving Street", "1200 Irving Street, San Francisco"]
 
 
+def test_an_address_that_names_its_own_place_is_never_rewritten(monkeypatch):
+    """The bug the gate exists for: "14 Oakridge Avenue, Scarborough, Ontario"
+    — a Toronto caller — got retried with ", Daly City" appended, matched a
+    same-named street there, and was BOOKED into the service area. An address
+    that already carries a locality was said by someone who named their place;
+    no-match means refuse and ask, never substitute our own city."""
+    monkeypatch.setenv("ADDRESS_PROVIDER", "census")
+    asked = []
+
+    def fake(url, params):
+        asked.append(params["address"])
+        if "Daly City" in params["address"]:
+            return _census_payload("14 OAKRIDGE DR, DALY CITY, CA, 94014", "DALY CITY", "94014")
+        return {"result": {"addressMatches": []}}
+
+    monkeypatch.setattr(addr, "_get_json", fake)
+    check = check_address(
+        "14 Oakridge Avenue, Scarborough, Ontario", "US",
+        hints=("San Francisco", "Daly City"),
+    )
+    assert check.verified is False
+    assert asked == ["14 Oakridge Avenue, Scarborough, Ontario"], (
+        "no hint retry may fire for an address that names its own place"
+    )
+
+
 def test_a_hint_already_in_the_text_is_not_appended_again(monkeypatch):
     monkeypatch.setenv("ADDRESS_PROVIDER", "census")
     asked = []

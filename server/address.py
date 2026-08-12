@@ -222,6 +222,15 @@ def check_address(raw: str | None, country: str = "US", hints: tuple = ()) -> Ad
     check = _lookup(provider, raw, country)
     if check.verified or not check.reachable:
         return check
+    # Hints are ONLY for a bare street. An address that already carries a
+    # locality of its own — a comma, a postcode, extra words — was said by
+    # someone who named their place, and appending our cities on top of that
+    # is how "14 Oakridge Avenue, Scarborough, Ontario" got booked as
+    # "14 OAKRIDGE DR, DALY CITY, CA": the retry legalised an out-of-area
+    # call by rewriting it into the service area. Refusing and asking again
+    # is strictly better than dispatching to a same-named street.
+    if "," in raw or len(raw.split()) > 5:
+        return check
     low = raw.lower()
     for hint in hints:
         h = str(hint or "").strip()
