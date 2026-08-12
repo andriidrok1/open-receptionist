@@ -201,10 +201,28 @@ booking:
       # names come back wrong from speech recognition, and the lookup repairs
       # them as well as rejecting the ones that do not exist.
       validate: address
+      # `examples` throughout: invented answers for seed_demo.py, so a seeded
+      # dashboard reads like a week of real jobs. Never shown to a caller.
+      examples:
+        ["295 Southgate Ave, Daly City, CA 94015",
+         "1847 Noriega St, San Francisco, CA 94122",
+         "633 Templeton Ave, Daly City, CA 94014",
+         "2210 Taraval St, Apt 3, San Francisco, CA 94116",
+         "88 Westmoor Ave, Daly City, CA 94015",
+         "451 Vienna St, San Francisco, CA 94112"]
     - key: problem
       label: what's wrong
       description: In the caller's own words — what is leaking, backing up or not working
       required: true
+      examples:
+        ["water leaking under the kitchen sink",
+         "toilet keeps running all night, won't stop",
+         "no hot water since this morning",
+         "kitchen drain backed up, water coming back grey",
+         "burst pipe in the garage, shut-off is closed",
+         "water heater dripping from the bottom",
+         "bathtub won't drain at all",
+         "garbage disposal jammed and humming"]
     - key: adult_present
       label: adult on site
       description: Whether someone 18 or older will be at the property when the plumber arrives
@@ -222,6 +240,11 @@ booking:
       label: how to get in
       description: Gate code, floor, parking, dogs, where the shut-off is
       required: false
+      examples:
+        ["gate code 4482, side entrance",
+         "ring unit 2, dog is friendly",
+         "park in the driveway, door's open",
+         "shut-off is in the garage, left wall"]
   resources:
     - key: visit
       label: Plumber visit

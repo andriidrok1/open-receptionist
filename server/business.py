@@ -119,6 +119,10 @@ class IntakeField:
     #: What the refusal error says. Empty falls back to a generic line from
     #: the language pack.
     refusal: str = ""
+    #: Plausible invented answers, only ever read by seed_demo.py — a seeded
+    #: dashboard card should read like a real job, and "what's wrong" is
+    #: vertical-specific text no generic fixture can supply.
+    examples: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -433,6 +437,7 @@ def load_business(key: str | None = None) -> Business:
                 type=(f.get("type") or "string").strip().lower(),
                 refuse_if=f.get("refuse_if", None),
                 refusal=(f.get("refusal") or "").strip(),
+                examples=tuple(str(x) for x in (f.get("examples") or ())),
             )
             for f in (b.get("intake") or [])
         ),

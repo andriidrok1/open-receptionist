@@ -552,6 +552,15 @@ fixtures:
                 William, Ashley, Daniel, Amanda, Christopher, Nicole, Brian, Laura]
   last_names: [Miller, Johnson, Garcia, Brown, Davis, Rodriguez, Wilson, Martinez,
                Anderson, Taylor, Thomas, Moore]
+  # Callback topics for seeded messages — vertical-neutral on purpose: the same
+  # pack seeds a hotel, a clinic and a plumber.
+  callback_topics:
+    ["billing question about the last visit — please call back",
+     "asks for an invoice with the company details",
+     "wants to speak to the owner about a recurring arrangement",
+     "asks if an earlier time can open up today",
+     "question about paying by card on site",
+     "asks whether you serve their area"]
 
 # End-of-turn detection. Words a sentence almost never stops on: if the line
 # trails off on one of these it is a pause, not an ending, and the wait should

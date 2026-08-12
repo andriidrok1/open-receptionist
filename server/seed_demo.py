@@ -5,18 +5,26 @@ Running it:
     BUSINESS=clinic python seed_demo.py    # appointments on the slot grid
     python seed_demo.py --keep             # add without clearing first
 
+Besides bookings this seeds what the inbox needs to look real: intake details
+(address, problem — from `examples` in the business YAML), a share of
+cancellations, callback messages, and the owner's checkmarks on everything
+old enough that a live owner would have dealt with it. Calls are NOT invented:
+a transcript is a record of something said, and there is nothing honest to
+fabricate one from.
+
 The data is realistic but invented. For a real client, simply do not run this
 script — the dashboard counts the records the voice agent actually created.
 
 """
 
 import argparse
+import json
 import random
 
 import phonenumbers
 import sqlite3
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import crm
 from business import BUSINESS, slot_grid
@@ -90,26 +98,71 @@ def _nights_span(created: datetime) -> tuple[tuple[str, str, int], str]:
     return (check_in.isoformat(), check_out.isoformat(), res.price * nights), res.key
 
 
+def _details() -> str | None:
+    """Intake answers for one seeded booking, from the YAML's `examples`.
+
+    A bool field with a refuse_if rule always gets the passing value — a
+    booking that exists is one the rules let through. Optional fields are
+    answered about half the time, like real callers do.
+    """
+    out = {}
+    for f in BOOK.intake:
+        if f.type == "bool":
+            if f.refuse_if is not None:
+                out[f.key] = str(f.refuse_if).strip().lower() not in ("true", "yes", "1")
+            else:
+                out[f.key] = random.random() < 0.9
+        elif f.examples and (f.required or random.random() < 0.5):
+            out[f.key] = random.choice(f.examples)
+    return json.dumps(out, ensure_ascii=False) if out else None
+
+
+def _utc(moment: datetime) -> str:
+    """The format and zone SQLite's datetime('now') stamps rows with — mixing
+    local time in made every seeded row jump hours on the dashboard."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def seed(n: int, keep: bool) -> None:
     crm.init_db()
+    now = datetime.now(timezone.utc)
     with sqlite3.connect(crm.DB_PATH) as conn:
         if not keep:
             conn.execute("DELETE FROM bookings")
+            conn.execute("DELETE FROM messages")
         made = 0
-        for _ in range(n):
-            created = datetime.now() - timedelta(
-                days=random.randint(0, 65), hours=random.randint(0, 23)
-            )
+        for i in range(n):
+            # The three newest records land within the last few hours, so a
+            # freshly seeded inbox opens on something that just happened
+            # rather than on last week.
+            if i < 3:
+                created = now - timedelta(minutes=random.randint(20, 240))
+            else:
+                created = now - timedelta(
+                    days=random.randint(0, 65), hours=random.randint(0, 23)
+                )
             span = _slot_span(created) if BOOK.is_slots else _nights_span(created)
             if not span:
                 continue
             (starts_at, ends_at, price), key = span
+
+            # ~8% called off; the rest handled once they are a couple of days
+            # old — a live owner keeps their inbox near zero, and 130 unread
+            # cards would read as "nobody looks at this".
+            cancelled = i >= 3 and random.random() < 0.08
+            cancelled_at = created + timedelta(hours=random.uniform(2, 30)) if cancelled else None
+            age_days = (now - created).days
+            handled_at = None
+            if age_days >= 2 or (age_days >= 1 and random.random() < 0.5):
+                handled_at = (cancelled_at or created) + timedelta(hours=random.uniform(1, 20))
+
             conn.execute(
                 """
                 INSERT INTO bookings
                     (id, ref_code, resource, starts_at, ends_at, party_size,
-                     customer_name, phone, total_price, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     customer_name, phone, total_price, details, status,
+                     cancelled_at, handled_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     uuid.uuid4().hex,
@@ -121,17 +174,42 @@ def seed(n: int, keep: bool) -> None:
                     f"{random.choice(FIRST)} {random.choice(LAST)}",
                     _phone(),
                     price,
-                    created.strftime("%Y-%m-%d %H:%M:%S"),
+                    _details(),
+                    "cancelled" if cancelled else "active",
+                    _utc(cancelled_at) if cancelled_at else None,
+                    _utc(handled_at) if handled_at else None,
+                    _utc(created),
                 ),
             )
             made += 1
+
+        topics = list(BUSINESS.pack.raw("fixtures.callback_topics", ()) or ())
+        msgs = 0
+        for i, topic in enumerate(random.sample(topics, min(4, len(topics)))):
+            created = now - timedelta(hours=random.uniform(1, 6) if i == 0 else random.uniform(6, 96))
+            handled = (now - created) > timedelta(days=1)
+            conn.execute(
+                "INSERT INTO messages (id, customer_name, phone, topic, handled_at, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    uuid.uuid4().hex,
+                    f"{random.choice(FIRST)} {random.choice(LAST)}",
+                    _phone(),
+                    topic,
+                    _utc(created + timedelta(hours=random.uniform(1, 8))) if handled else None,
+                    _utc(created),
+                ),
+            )
+            msgs += 1
         conn.commit()
 
     total = crm.stats()
+    fresh = sum(1 for x in crm.inbox() if not x["handled"])
     print(
-        f"{BUSINESS.key}: seeded {made} records into {crm.DB_PATH.name}. "
-        f"In period: {total['kpi']['total_bookings']}, "
-        f"revenue {total['kpi']['total_revenue']} {BUSINESS.currency}"
+        f"{BUSINESS.key}: seeded {made} bookings and {msgs} messages into"
+        f" {crm.DB_PATH.name}. In period: {total['kpi']['total_bookings']},"
+        f" revenue {total['kpi']['total_revenue']} {BUSINESS.currency},"
+        f" unhandled in the inbox: {fresh}"
     )
 
 
