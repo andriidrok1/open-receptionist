@@ -251,6 +251,11 @@ def test_declared_key_matches_the_filename(key):
     """`BUSINESS=x` loads x.yaml and then trusts the `key:` inside it. When they
     disagree, the database rows are written under one name and read under the
     other."""
+    if key.startswith("_"):
+        # _template.yaml is copied and renamed by the installer, so its `key`
+        # matches nothing on purpose. It still runs every OTHER test in this
+        # file: a template that breaks the schema teaches every copier wrong.
+        pytest.skip("a template, not a business")
     raw = yaml.safe_load((BUSINESSES_DIR / f"{key}.yaml").read_text(encoding="utf-8")) or {}
     declared = raw.get("key")
     assert declared in (None, key), f"{key}.yaml declares key: {declared!r}"

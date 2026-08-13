@@ -1,0 +1,191 @@
+# ── New business template ────────────────────────────────────────────────────
+# Copy this file, fill it in from the owner interview (docs/new-business.md),
+# and start the bot with BUSINESS=<filename without .yaml>.
+#
+# The fastest path is NOT this template: copy the existing config closest to
+# your client (emergency_us, dental_us, hotel, barbershop, cleaning) and edit.
+# This file exists to explain every field once, with all options spelled out.
+#
+# Keep a real client's file out of the repo: BUSINESS_CONFIG=/srv/clients/x.yaml
+
+# Internal id. Lowercase, no spaces. Also the default database name (<key>.db).
+key: my_business
+# Language pack the agent speaks: en | uk (locales/<language>.yaml).
+language: en
+# ISO country code — how phone numbers are parsed and read back.
+country: US
+# The BUSINESS's timezone, never the server's. "Today" and opening hours
+# live in this zone.
+tz: America/Los_Angeles
+
+# How the agent SAYS the name out loud (write it the way it should sound).
+name: Acme Plumbing
+# How the dashboard and demo page are labelled (usually the same).
+brand: Acme Plumbing
+city: San Francisco, CA
+# The agent introduces itself with this name in the first sentence.
+agent_name: Dana
+# One noun phrase: who the agent is. Goes into the system prompt verbatim.
+persona: the dispatcher
+# Two or three sentences of voice direction. Written as instructions, not
+# as an example ("Be short and calm", not "Hello! How can I help?").
+tone: >-
+  Be short and calm. Callers have a problem; they need "we can help, here's
+  when", not ceremony.
+# "$" prefixes the amount ($99); a word suffixes it (99 грн).
+currency: "$"
+
+# What one caller is called, in three grammatical cases (nominative /
+# genitive / dative). English repeats the same word; Ukrainian does not.
+# Pick the industry's own word: guest / patient / customer / client.
+customer: {nom: customer, gen: customer, dat: customer}
+
+# Two examples that teach the voice better than any adjective: the same
+# situation answered the WRONG way (corporate, long, evasive) and the RIGHT
+# way (this business's actual manner). The recap shows how the pre-booking
+# summary should sound — <angle brackets> mark the slots.
+speech:
+  bad: >-
+    Thank you for calling Acme Plumbing. I would be happy to assist you with
+    scheduling a service appointment at your earliest convenience.
+  good: >-
+    Got it — water under the sink. I can get someone out at two today.
+    Ninety-nine for the visit. Send him?
+  recap: >-
+    So — plumber to <address>, <day> between <window start> and <window end>,
+    for <name>. That right?
+
+# Questions the agent must NOT try to answer — it takes a callback message
+# instead. Only questions go here; emergencies belong in `knowledge`.
+escalation_examples: >-
+  a billing question about a past job, a complaint about earlier work
+
+# The heart of the config: everything the agent is allowed to know, in plain
+# prose. Rules of thumb, learned the hard way (see emergency_us.yaml):
+#   - Write POLICIES, not FAQ answers — the model rephrases prose well but
+#     invents policy badly. If a policy is not here, the agent must say it
+#     does not know — so write down the boring ones (payment, parking, pets).
+#   - Anything that must happen EARLY in the call, say so explicitly
+#     ("ask which city right after what's wrong").
+#   - Safety protocols go FIRST and in imperative form.
+#   - What you do NOT do matters as much as what you do.
+knowledge: |
+  Acme Plumbing — emergency plumbing across San Francisco and Daly City.
+  Open twenty-four hours, seven days a week.
+
+  THE VISIT FEE IS $99. Say it early, unprompted. It covers the plumber
+  coming out and finding the problem.
+
+  YOU DO NOT PRICE REPAIRS over the phone. The plumber prices on site.
+
+  WHAT WE DO: leaks, burst pipes, blocked drains, water heaters.
+  WHAT WE DO NOT DO: electrical, HVAC, gas lines. Say so and end politely.
+
+  PAYMENT: card or cash on completion. Never take a card number by phone.
+
+  YOU ARE AN AUTOMATED ASSISTANT AND YOU SAY SO IN YOUR FIRST SENTENCE.
+
+# Words the speech recognition must never mishear: service names, street
+# vocabulary, brand terms. Max 50 terms, max 20 characters each.
+keyterms: [plumber, drain, leak, burst pipe, water heater]
+
+booking:
+  # Turn off for a business that only answers questions and takes messages —
+  # that is a working receptionist too. Everything below then disappears.
+  enabled: true
+  # The single most important choice — the time model:
+  #   slots  — an appointment at a time the SERVICE defines (duration below).
+  #            Clinics, barbershops, service visits, tutors.
+  #   nights — a range of days the CUSTOMER defines (check-in / check-out),
+  #            priced per night. Hotels, apartments, rentals.
+  granularity: slots
+  # The noun and verb of the deal, as spoken: "book a visit" / "book a room".
+  action: visit
+  action_gen: visits
+  verb: book
+  # What the resource is called when the agent asks "which …?"
+  resource_param: service
+  resource_label: service
+  # nights-only: what one unit is called (room / apartment) and whether to
+  # ask how many people are coming (party_label names them: guests).
+  # unit: room
+  # ask_party: true
+  # party_label: guests
+  # max_party: 6
+  ask_party: false
+  # Booking references look like JOB-4821 — pick a prefix the owner likes.
+  ref_prefix: "JOB-"
+  # slots-only: the appointment grid. 60 = on the hour, 30 = half-hours.
+  slot_step_min: 60
+  # slots-only, for the trades: quote "between nine and ten" instead of a
+  # minute. 0 = say the exact time (clinics, barbershops do).
+  arrival_window_min: 60
+  # Mention the price in the recap without being asked. Businesses with a
+  # fixed fee want this on; per-job pricing wants it off.
+  announce_price: true
+  # How far ahead the agent may book, in days.
+  horizon_days: 7
+  # Opening hours by the business's clock; a missing day = closed that day.
+  # 24/7 is "00:00-23:59" all seven days.
+  hours:
+    mon: "09:00-18:00"
+    tue: "09:00-18:00"
+    wed: "09:00-18:00"
+    thu: "09:00-18:00"
+    fri: "09:00-18:00"
+    sat: "10:00-16:00"
+    # sun absent = closed on Sunday
+  # Optional, for businesses that go to the customer: cities we serve.
+  # Enforced in code against the geocoded address, not the caller's words.
+  # service_area: [San Francisco, Daly City]
+  # What the agent must collect before a booking can be written. Each field:
+  #   key       — column name in the database and on the dashboard card
+  #   label     — the human label the dashboard shows
+  #   description — tells the AGENT what to ask for, in its own words
+  #   required  — a booking cannot be created without it
+  #   validate: address — check the street against a gazetteer (needs a
+  #               service_area); repairs misheard street names
+  #   type: bool + refuse_if + refusal — a yes/no rule enforced in CODE:
+  #               if the answer equals refuse_if, the agent must not book
+  #               and says why (the refusal text guides its wording)
+  #   examples  — invented answers for seed_demo.py so a demo dashboard
+  #               reads like a real week; never shown to a caller
+  intake:
+    - key: address
+      label: address
+      description: Street, number and unit, and which city
+      required: true
+      validate: address
+      examples: ["1847 Noriega St, San Francisco, CA 94122"]
+    - key: problem
+      label: what's wrong
+      description: In the caller's own words — what is broken or leaking
+      required: true
+      examples: ["water leaking under the kitchen sink"]
+  # What can be booked. slots: one entry per bookable service, each with its
+  # own duration and price. nights: one entry per room/unit type.
+  #   capacity — how many of these can run at the same time. For a service
+  #   business this is the crew count, and it is the REAL limit: four
+  #   services at capacity 2 each would dispatch eight simultaneous jobs
+  #   from a two-truck shop — use ONE resource when one crew does them all.
+  #   aliases — every word a caller might use for this; drives matching.
+  resources:
+    - key: visit
+      label: Plumber visit
+      note: coming out and finding the problem; the repair is priced on site
+      aliases: [plumber, visit, call out, leak, drain, toilet]
+      price: 99
+      duration_min: 60
+      capacity: 2
+
+# The showcase page (run_demo.py): the tab name, the one-paragraph pitch a
+# business owner reads, and three things to try saying.
+demo:
+  tab: My Business
+  intro: >-
+    Dana answers the phone at a 24/7 plumbing shop: takes the address and the
+    problem, states the visit fee up front, and books the next truck.
+  try:
+    - There's water coming out from under my sink
+    - How much do you charge to come out?
+    - Can someone come out tonight?
