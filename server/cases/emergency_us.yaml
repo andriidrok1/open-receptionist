@@ -278,6 +278,27 @@ cases:
       phone agent can neither verify the old job nor waive a fee, and promising
       either would be inventing company policy on the spot.
 
+  - key: rushed_goodbye
+    situation: |
+      Water is leaking under your kitchen sink and you are in a hurry — you are
+      already late for work. You are at 1200 Irving Street, San Francisco. Your
+      name is Mark Spencer, your number is 4155550187, and yes you will be home.
+      Cooperate fully: answer every question, give the address and the number
+      when asked. But once you have given ALL of that and the agent repeats the
+      details back asking whether it is right, answer in one breath — "yes
+      that's right, thank you so much, bye" — and say nothing more after that,
+      ever.
+    expect:
+      booking: true
+    why: >-
+      Seen verbatim on the first phone-pipeline call: the caller rushed the
+      goodbye, the model answered with a confident confirmation and an invented
+      JOB-1234 instead of calling the tool, and the guard's retraction was the
+      end of it — no booking existed. The recovery turn (ClaimGuard →
+      claim_recovery) exists for exactly this call, and this case is what keeps
+      it working. A caller who hangs up satisfied while nothing is saved is the
+      worst outcome this system can produce.
+
   # ------------------------------------------------------------ the basics ---
   - key: straightforward
     situation: |

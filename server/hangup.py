@@ -107,12 +107,16 @@ class ClaimGuard(FrameProcessor):
         retract_line: str,
         digit_words: dict[str, str] | None = None,
         phone_len: int | None = None,
+        on_retract=None,
+        max_recoveries: int = 2,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self._retract = retract_line
         self._digit_words = dict(digit_words or {})
         self._phone_len = phone_len
+        self._on_retract = on_retract
+        self._recoveries_left = max_recoveries
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -124,6 +128,15 @@ class ClaimGuard(FrameProcessor):
                     "replacing the reply"
                 )
                 frame = TextFrame(self._retract)
+                # Retracting alone loses the booking: the caller has already
+                # said their goodbye and may never speak another turn, so
+                # nothing would ever prompt the model to actually file it.
+                # The callback gives it that turn. Capped, because a model
+                # that hallucinates on the recovery turn too would otherwise
+                # chase its own tail down the caller's ear.
+                if self._on_retract and self._recoveries_left > 0:
+                    self._recoveries_left -= 1
+                    await self._on_retract()
             elif changed:
                 logger.warning(f"[claim] invented reference {changed} → the real one")
                 frame = TextFrame(fixed)

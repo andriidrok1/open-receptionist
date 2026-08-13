@@ -508,6 +508,22 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     call_metrics = CallMetrics(on_finish=store_metrics)
 
+    async def claim_recovery() -> None:
+        """Give the model the turn it needs to actually file the booking.
+
+        Runs when ClaimGuard has just retracted a fabricated confirmation. The
+        caller may already have said goodbye and will never speak again, so
+        waiting for their next turn means the booking is silently lost. A
+        developer note names the failure, and an immediate run lets the model
+        call create_booking (or honestly ask for what is missing) right after
+        the retraction line is spoken. `worker` is assigned below, before any
+        call reaches the pipeline.
+        """
+        context.add_message(
+            {"role": "developer", "content": L.text("prompt.claim_recovery")}
+        )
+        await worker.queue_frames([LLMRunFrame()])
+
     # Pipeline: audio in → [VAD] → STT → aggregator → LLM → TTS → audio out.
     # The VAD processor (for the ElevenLabs STT) must sit BEFORE the STT: its
     # VADUser* frames both commit the STT and feed the end-of-turn strategy
@@ -549,6 +565,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 # the first live recap dropped a digit from the number.
                 digit_words=dict(L.raw("speech.digit_words", {})),
                 phone_len=_local_phone_digits(BUSINESS.country),
+                # The retraction promises "let me put it in properly now" — this
+                # is what keeps that promise. Seen on the first phone-pipeline
+                # call: the caller rushed "yes, thanks, bye" in one breath, the
+                # model invented JOB-1234 instead of calling create_booking, the
+                # guard retracted it — and with the caller done talking, no
+                # turn would ever come to actually file the job.
+                on_retract=claim_recovery,
             ),
             TranscriptCollector(recorder, side="agent"),
             # Reads the assembled reply and hangs up when it is a sign-off. Must

@@ -225,6 +225,58 @@ def test_the_processor_leaves_an_honest_reply_alone():
     assert _through_guard(honest) == honest
 
 
+def _guard_with_recovery(max_recoveries=2):
+    """A ClaimGuard wired the way bot.py wires it: retraction triggers the
+    recovery callback that gives the model a turn to actually file the job."""
+    from pipecat.frames.frames import TextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+
+    from hangup import ClaimGuard
+
+    runs = []
+
+    async def recover():
+        runs.append(1)
+
+    guard = ClaimGuard(RETRACT, on_retract=recover, max_recoveries=max_recoveries)
+
+    async def swallow(frame, direction=FrameDirection.DOWNSTREAM):
+        pass
+
+    guard.push_frame = swallow
+
+    def speak(text: str) -> None:
+        import asyncio
+
+        asyncio.run(guard.process_frame(TextFrame(text), FrameDirection.DOWNSTREAM))
+
+    return guard, speak, runs
+
+
+def test_a_retraction_triggers_the_recovery_turn():
+    """Retracting alone loses the booking — the caller already said goodbye
+    and may never speak again. The callback is what files the job."""
+    _, speak, runs = _guard_with_recovery()
+    speak("Your appointment is set. Reference APT-5678.")
+    assert runs == [1]
+
+
+def test_an_honest_reply_triggers_no_recovery():
+    guards.remember_ref("JOB-2831")
+    _, speak, runs = _guard_with_recovery()
+    speak("I can get someone out at eight. Ninety-nine for the visit. Send him?")
+    assert runs == []
+
+
+def test_recovery_is_capped_against_a_model_chasing_its_tail():
+    """If the model hallucinates on the recovery turn too, the guard must not
+    loop forever down the caller's ear."""
+    _, speak, runs = _guard_with_recovery(max_recoveries=2)
+    for _ in range(5):
+        speak("Your appointment is set. Reference APT-5678.")
+    assert len(runs) == 2
+
+
 # -------------------------------- the goodbye --------------------------------
 
 
