@@ -54,7 +54,7 @@ This is honest, not modest. Here is exactly where it stands today.
   path — see [docs/telephony.md](docs/telephony.md)
 - An owner dashboard that is an inbox first, stats second (screenshots below)
 - Measured cost: **≈ $0.09 per spoken minute** all-in (breakdown below)
-- 396 tests, plus two conversation harnesses (scripted and an LLM playing
+- 410 tests, plus two conversation harnesses (scripted and an LLM playing
   difficult callers)
 
 **In progress, and not there yet**
