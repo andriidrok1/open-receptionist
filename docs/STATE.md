@@ -224,7 +224,8 @@ server/
   businesses/       seven configs + _template.yaml — the business
   scenarios/        uk.yaml, en.yaml — test callers and eval data
   tests/            421 deterministic tests
-docs/               telephony.md, install.md, new-business.md, README.uk.md
+docs/               telephony.md, install.md, new-business.md, README.uk.md,
+                    STATE.md (this file), building-on-pipecat.md
 ```
 
 The split that matters: **language** (locales) / **business** (businesses) /
