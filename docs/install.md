@@ -19,7 +19,7 @@ their own server (or a second directory on yours with different ports).
 ## 1. Configure
 
 ```bash
-git clone <repo> && cd open-receptionist
+git clone https://github.com/andriidrok1/open-receptionist.git && cd open-receptionist
 cp server/.env.example server/.env
 ```
 

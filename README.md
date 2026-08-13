@@ -97,7 +97,7 @@ Requires an OpenAI key and an ElevenLabs key. Two ways in:
 **Docker** (how a real install runs — agent + dashboard sharing one database):
 
 ```bash
-git clone <this repo> && cd open-receptionist
+git clone https://github.com/andriidrok1/open-receptionist.git && cd open-receptionist
 cp server/.env.example server/.env   # add the two keys
 docker compose up -d --build
 ```
