@@ -1,0 +1,53 @@
+# One install = one business = one `docker compose up -d`.
+#
+#   cp server/.env.example server/.env   # add your keys, set BUSINESS=
+#   docker compose up -d --build
+#
+# The agent answers on :7860 (browser demo at /client; Twilio webhook when
+# PUBLIC_HOST is set). The owner dashboard is on :8000 — published only to
+# localhost until you set DASHBOARD_PASSWORD in server/.env and change
+# DASHBOARD_BIND below, because the page holds every customer's phone number.
+#
+# Both containers share one SQLite file on the `data` volume — the agent
+# writes bookings, the dashboard reads them. Backups are one file:
+#   docker compose cp dashboard:/data/receptionist.db ./backup.db
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: server/.env
+    environment:
+      CRM_DB: /data/receptionist.db
+    ports:
+      - "7860:7860"
+    volumes:
+      - data:/data
+    # With PUBLIC_HOST set in server/.env (your domain or tunnel hostname,
+    # no https://), the agent answers Twilio's webhook — see docs/telephony.md.
+    # Without it, it serves the browser demo.
+    command: >
+      sh -c 'if [ -n "$$PUBLIC_HOST" ];
+             then exec python bot.py -t twilio -x "$$PUBLIC_HOST" --host 0.0.0.0;
+             else exec python bot.py --host 0.0.0.0; fi'
+
+  dashboard:
+    build: .
+    restart: unless-stopped
+    env_file: server/.env
+    environment:
+      CRM_DB: /data/receptionist.db
+      DASHBOARD_HOST: 0.0.0.0
+      # The dashboard's honest health dot probes the agent's port.
+      BOT_HOST: bot
+      BOT_PORT: 7860
+    ports:
+      # Localhost-only by default. To let the owner open it from a phone:
+      # set DASHBOARD_PASSWORD in server/.env, then DASHBOARD_BIND=0.0.0.0
+      - "${DASHBOARD_BIND:-127.0.0.1}:8000:8000"
+    volumes:
+      - data:/data
+    command: ["python", "dashboard.py"]
+
+volumes:
+  data:

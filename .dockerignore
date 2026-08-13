@@ -1,0 +1,16 @@
+# Secrets and customer data never enter the image. The volume carries the
+# database; .env is passed at runtime via env_file.
+server/.env
+server/*.db
+server/*.db-shm
+server/*.db-wal
+server/voice_lab_out/
+server/voice_lab_state.json
+server/__pycache__/
+server/**/__pycache__/
+server/.pytest_cache/
+.git/
+.venv/
+client/
+docs/
+*.md
