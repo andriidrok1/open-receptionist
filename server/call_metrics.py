@@ -33,8 +33,8 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     CancelFrame,
     EndFrame,
-    FunctionCallInProgressFrame,
     Frame,
+    FunctionCallInProgressFrame,
     MetricsFrame,
     VADUserStoppedSpeakingFrame,
 )

@@ -1,5 +1,7 @@
 # open-receptionist
 
+[![tests](https://github.com/andriidrok1/open-receptionist/actions/workflows/tests.yml/badge.svg)](https://github.com/andriidrok1/open-receptionist/actions/workflows/tests.yml)
+
 A self-hosted voice receptionist for small businesses. Someone calls, talks to
 it normally, and it answers questions about the business, books the
 appointment, and honestly hands off anything it doesn't know.

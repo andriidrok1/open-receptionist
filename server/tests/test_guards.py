@@ -187,9 +187,10 @@ def _through_guard(text: str) -> str:
     """Push one reply through ClaimGuard and return what it would have spoken."""
     import asyncio
 
-    from hangup import ClaimGuard
     from pipecat.frames.frames import TextFrame
     from pipecat.processors.frame_processor import FrameDirection
+
+    from hangup import ClaimGuard
 
     spoken: list[str] = []
     guard = ClaimGuard(RETRACT)

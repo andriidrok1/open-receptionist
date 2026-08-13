@@ -55,12 +55,13 @@ import yaml
 os.environ["CRM_DB"] = str(Path(tempfile.gettempdir()) /
                            f"adversary_{os.environ.get('BUSINESS', 'hotel')}.db")
 
+from openai import OpenAI  # noqa: E402
+from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: E402
+
 import agent_tools  # noqa: E402
 import crm  # noqa: E402
 import guards  # noqa: E402
 from business import BUSINESS, _local_phone_digits, build_system_prompt  # noqa: E402
-from openai import OpenAI  # noqa: E402
-from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: E402
 from hangup import call_state_line, says_goodbye  # noqa: E402
 from simulate import CHECKS, _cleanup, warn_unverified_slot  # noqa: E402
 

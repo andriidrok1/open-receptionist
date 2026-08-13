@@ -32,9 +32,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-import tts_settings
 from dotenv import load_dotenv
 
+import tts_settings
 from locale_pack import load_locale
 
 SERVER_DIR = Path(__file__).resolve().parent

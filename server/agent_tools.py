@@ -14,16 +14,15 @@ Note on language: every `description` here is read by the model, so the text
 lives in the language pack (locales/<lang>.yaml), not in this file.
 """
 
-from business import BUSINESS, L
-from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
-
 import sqlite3
 
 from loguru import logger as _logger
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
 import crm
 import guards
+from business import BUSINESS, L
 
 BIZ = BUSINESS
 BOOK = BUSINESS.booking

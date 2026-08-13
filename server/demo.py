@@ -16,13 +16,14 @@ working core for no reason.
 
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
-from business import load_business
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from business import load_business
 from locale_pack import LOCALES_DIR, load_locale
 
 HERE = Path(__file__).parent
@@ -220,7 +221,7 @@ def api_now() -> JSONResponse:
     appeared in the system during this call" misses — the owner is told nothing
     was recorded right after the bot read out a booking reference.
     """
-    return JSONResponse({"utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
+    return JSONResponse({"utc": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.get("/api/activity/{key}")

@@ -34,17 +34,10 @@ import json
 import os
 
 import aiohttp
-
-import agent_tools
-import crm
-import guards
-from business import BUSINESS, L, _local_phone_digits, build_system_prompt, greeting_hint
-from call_metrics import CallMetrics, format_report
-from recording import CallRecorder, TranscriptCollector
-from hangup import CallEnder, ClaimGuard, GoodbyeWatch, IdleWatch, StateNudge, call_state_line
-from turn_taking import SemanticSpeechTimeoutStrategy
 from dotenv import load_dotenv
 from loguru import logger
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -58,32 +51,18 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
-from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
-    TranscriptionUserTurnStartStrategy,
-)
-from pipecat.turns.user_start.vad_user_turn_start_strategy import (
-    VADUserTurnStartStrategy,
-)
-from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
-    SpeechTimeoutUserTurnStopStrategy,
-)
-from pipecat.turns.types import ProcessFrameResult
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport
-from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
-from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService, CommitStrategy
+from pipecat.services.elevenlabs.stt import CommitStrategy, ElevenLabsRealtimeSTTService
 from pipecat.services.elevenlabs.tts import (
     ElevenLabsHttpTTSService,
     ElevenLabsTTSService,
@@ -93,9 +72,30 @@ from pipecat.services.openai.stt import OpenAIRealtimeSTTService
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
+from pipecat.turns.types import ProcessFrameResult
+from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
+    TranscriptionUserTurnStartStrategy,
+)
+from pipecat.turns.user_start.vad_user_turn_start_strategy import (
+    VADUserTurnStartStrategy,
+)
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+    SpeechTimeoutUserTurnStopStrategy,
+)
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
+
+import agent_tools
+import crm
+import guards
 import tts_settings
+from business import BUSINESS, L, _local_phone_digits, build_system_prompt, greeting_hint
+from call_metrics import CallMetrics, format_report
+from hangup import CallEnder, ClaimGuard, GoodbyeWatch, IdleWatch, StateNudge, call_state_line
+from recording import CallRecorder, TranscriptCollector
 from speech_text import SpeechTextFilter, WholeReplyAggregator
+from turn_taking import SemanticSpeechTimeoutStrategy
 
 # Defaults only: an exported variable wins, so a one-off experiment
 # (ELEVENLABS_TTS_MODEL=... python run_demo.py) actually takes effect.

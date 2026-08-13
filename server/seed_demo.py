@@ -20,11 +20,11 @@ script — the dashboard counts the records the voice agent actually created.
 import argparse
 import json
 import random
-
-import phonenumbers
 import sqlite3
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
+
+import phonenumbers
 
 import crm
 from business import BUSINESS, slot_grid
@@ -120,12 +120,12 @@ def _details() -> str | None:
 def _utc(moment: datetime) -> str:
     """The format and zone SQLite's datetime('now') stamps rows with — mixing
     local time in made every seeded row jump hours on the dashboard."""
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def seed(n: int, keep: bool) -> None:
     crm.init_db()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with sqlite3.connect(crm.DB_PATH) as conn:
         if not keep:
             conn.execute("DELETE FROM bookings")

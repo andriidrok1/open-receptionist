@@ -23,7 +23,7 @@ startup — a prompt silently missing a paragraph is far worse than a crash.
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 from string import Formatter
 
@@ -298,7 +298,7 @@ def load_locale(lang: str | None = None) -> Locale:
     return _load_locale(lang or DEFAULT_LANGUAGE)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _load_locale(lang: str) -> Locale:
     path = LOCALES_DIR / f"{lang}.yaml"
     if not path.exists():

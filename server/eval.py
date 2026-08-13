@@ -57,11 +57,12 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / f"eval_{os.environ.get('BUSINESS', 'hotel')}.db"),
 )
 
+from openai import OpenAI  # noqa: E402
+from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: E402
+
 import agent_tools  # noqa: E402
 import crm  # noqa: E402
 from business import BUSINESS, build_system_prompt  # noqa: E402
-from openai import OpenAI  # noqa: E402
-from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter  # noqa: E402
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 

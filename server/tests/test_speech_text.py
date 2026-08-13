@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from locale_pack import LOCALES_DIR, load_locale  # noqa: E402
 from speech_text import (  # noqa: E402
-    MAX_BREAKS,
     MAX_BREAK_SEC,
+    MAX_BREAKS,
     SpeechTextFilter,
     sanitize_breaks,
 )

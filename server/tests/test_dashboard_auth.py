@@ -21,8 +21,9 @@ import crm  # noqa: E402
 
 crm.init_db()
 
-import dashboard  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+
+import dashboard  # noqa: E402
 
 
 def fresh_client() -> TestClient:

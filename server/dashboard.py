@@ -29,13 +29,14 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import crm
-import notify
-from business import BUSINESS
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+import crm
+import notify
+from business import BUSINESS
 
 app = FastAPI(title=f"open-receptionist · {BUSINESS.key}")
 
@@ -133,7 +134,7 @@ async def _agent_online() -> bool:
         online = True
     except OSError:
         online = False
-    except asyncio.TimeoutError:
+    except TimeoutError:
         online = False
     _health.update(at=now, online=online)
     return online

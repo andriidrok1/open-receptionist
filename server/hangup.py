@@ -25,8 +25,6 @@ from __future__ import annotations
 import asyncio
 import re
 
-import guards
-
 from loguru import logger
 from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
@@ -37,6 +35,8 @@ from pipecat.frames.frames import (
     UserStartedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+import guards
 
 #: If the bot never reports that it stopped speaking — synthesis failed, the
 #: transport died — end anyway rather than stay on the line forever. Generous
@@ -158,7 +158,7 @@ class GoodbyeWatch(FrameProcessor):
     aggregator and before the synthesiser.
     """
 
-    def __init__(self, ender: "CallEnder", words, **kwargs):
+    def __init__(self, ender: CallEnder, words, **kwargs):
         super().__init__(**kwargs)
         self._ender = ender
         self._words = tuple(words or ())

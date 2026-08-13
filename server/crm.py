@@ -28,13 +28,12 @@ import re
 import sqlite3
 import uuid
 from contextvars import ContextVar
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import phonenumbers
 from phonenumbers import NumberParseException, PhoneNumberFormat, ValidationResult
-from datetime import date, datetime, timedelta
-from pathlib import Path
-
-from zoneinfo import ZoneInfo
 
 from address import check_address, in_service_area
 from business import BUSINESS, CLI_CRM_DB, L, slot_grid

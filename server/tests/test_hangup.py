@@ -122,9 +122,10 @@ def _nudge_pass(line_value: str, prior: list | None = None):
     """Run one LLMContextFrame through StateNudge against a stub context."""
     import asyncio
 
-    from hangup import StateNudge
     from pipecat.frames.frames import LLMContextFrame
     from pipecat.processors.frame_processor import FrameDirection
+
+    from hangup import StateNudge
 
     class Ctx:
         def __init__(self):
