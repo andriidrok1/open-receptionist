@@ -156,6 +156,17 @@ prompt:
     ask for the number again THEN AND THERE — before you read the booking back.
     Never pad it, never drop a digit to make it fit.
 
+  # Injected as a developer note the moment ClaimGuard retracts a confirmation
+  # the model invented. The retraction line has just promised the caller "let
+  # me put it in properly now" — this is the instruction that makes it happen.
+  claim_recovery: |-
+    You just told the caller their booking was made, but NO tool created it —
+    nothing is saved, and your reply was replaced with a correction. Right now,
+    in this turn: if you have every required detail, call the booking tool
+    immediately and then confirm with the real reference it returns. If
+    anything is missing, ask for it. Never state a booking exists until the
+    tool has returned its reference.
+
   date_hint: |-
     Today is {today}, {weekday}, and it's {time} right now.
     The calendar for the next two weeks, first line today:
@@ -590,6 +601,11 @@ notify:
   message_title: Callback request
   connected: >-
     ✅ Connected. New bookings and messages from {brand} will arrive here.
+  agent_down: >-
+    ⚠️ {brand}: the assistant has stopped answering the phone. Until it is
+    back, calls go unanswered.
+  agent_up: >-
+    ✅ {brand}: the assistant is answering calls again.
 
 # Invented names for demo data (seed_demo.py). An English panel full of
 # Ukrainian surnames reads as an unfinished product.

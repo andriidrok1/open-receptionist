@@ -198,6 +198,31 @@ def test_strangers_get_silence():
     assert notify.handle_update({}) is None
 
 
+def test_agent_watch_pages_once_on_death_and_once_on_recovery():
+    w = notify.AgentWatch(fails_needed=2)
+    assert w.observe(True) is None            # baseline set silently
+    assert w.observe(False) is None           # one miss = maybe a restart
+    assert w.observe(False) == "agent_down"   # a minute of silence = a page
+    assert w.observe(False) is None           # still down = no repeat
+    assert w.observe(True) == "agent_up"      # recovery = the all-clear
+    assert w.observe(True) is None            # staying up = silence
+
+
+def test_agent_watch_pages_even_when_the_bot_never_came_up():
+    """An install where the agent failed to boot is exactly a page-worthy
+    night — unknown baseline must not swallow it."""
+    w = notify.AgentWatch(fails_needed=2)
+    assert w.observe(False) is None
+    assert w.observe(False) == "agent_down"
+
+
+def test_agent_watch_ignores_a_single_blip():
+    w = notify.AgentWatch(fails_needed=2)
+    w.observe(True)
+    assert w.observe(False) is None
+    assert w.observe(True) is None  # back before the debounce ran out — quiet
+
+
 def test_unlink_burns_the_code_too():
     try:
         code = notify.ensure_pair_code()

@@ -146,7 +146,58 @@ def render(item: dict) -> str:
     return "\n".join(lines)
 
 
-# ------------------------------ the two loops ------------------------------
+# ------------------------------ agent watch ------------------------------
+#
+# The dashboard's status dot is honest, but it is only seen by someone who has
+# the page open. Every hour of a dead agent is missed calls the owner paid to
+# catch — so the same probe feeds the phone: one message when the agent goes
+# down, one when it comes back.
+
+BOT_HOST = os.getenv("BOT_HOST", "127.0.0.1")
+BOT_PORT = int(os.getenv("BOT_PORT", "7860"))
+
+
+class AgentWatch:
+    """Turns a stream of up/down observations into at most two messages.
+
+    Debounced: a restart mid-probe must not page anyone, so "down" needs
+    `fails_needed` consecutive misses (with 30 s probes that is a minute of
+    silence). The starting state is unknown on purpose — the first "up" sets
+    the baseline silently, but a bot that never comes up still alerts: an
+    install where the agent failed to boot is exactly a page-worthy night.
+    """
+
+    def __init__(self, fails_needed: int = 2):
+        self._state: bool | None = None
+        self._fails = 0
+        self._fails_needed = fails_needed
+
+    def observe(self, online: bool) -> str | None:
+        """One probe result in; a notify.* locale key out, or None."""
+        if online:
+            self._fails = 0
+            was_down = self._state is False
+            self._state = True
+            return "agent_up" if was_down else None
+        self._fails += 1
+        if self._fails >= self._fails_needed and self._state is not False:
+            self._state = False
+            return "agent_down"
+        return None
+
+
+async def _agent_listening() -> bool:
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(BOT_HOST, BOT_PORT), timeout=1.0
+        )
+        writer.close()
+        return True
+    except (OSError, TimeoutError):
+        return False
+
+
+# ------------------------------ the loops ------------------------------
 
 
 def handle_update(update: dict) -> tuple[int, str] | None:
@@ -238,4 +289,15 @@ async def run_forever() -> None:
                     logger.warning(f"[notify] delivery sweep failed: {e}")
                 await asyncio.sleep(5)
 
-        await asyncio.gather(updates_loop(), pending_loop())
+        async def watchdog_loop():
+            watch = AgentWatch()
+            while True:
+                key = watch.observe(await _agent_listening())
+                if key:
+                    logger.warning(f"[notify] agent transition: {key}")
+                    text = BUSINESS.pack.text(f"notify.{key}", brand=BUSINESS.brand)
+                    for chat in chats():
+                        await send(chat, text)
+                await asyncio.sleep(30)
+
+        await asyncio.gather(updates_loop(), pending_loop(), watchdog_loop())
