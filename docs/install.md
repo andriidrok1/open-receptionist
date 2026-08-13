@@ -84,6 +84,23 @@ Open `https://<server>:8000` (or map it behind your domain), sign in with
 The dashboard needs nothing installed on the owner's phone — it is a web
 page. Set the password, send the link.
 
+## 6. Turn on phone notifications
+
+Two minutes, once per install:
+
+1. In Telegram, ask [@BotFather](https://t.me/BotFather) for `/newbot`, name
+   it after the business ("Acme Plumbing bot"), copy the token.
+2. `TELEGRAM_BOT_TOKEN=…` in `server/.env`, restart
+   (`docker compose up -d`).
+3. On the dashboard: Settings → **Connect Telegram**. The owner taps the
+   link, presses Start, and from then on every new booking, cancellation and
+   callback request lands on their phone — delivery is retried until it
+   succeeds, so a flaky network loses nothing. Anyone the owner shares the
+   link with (a partner, a foreman) connects the same way; **Disconnect all**
+   revokes everyone and burns the invite link.
+
+The owner's own dashboard actions are never echoed back at their phone.
+
 ## Day-2 operations
 
 - **Backup** is one file:

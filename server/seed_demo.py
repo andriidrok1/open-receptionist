@@ -161,8 +161,9 @@ def seed(n: int, keep: bool) -> None:
                 INSERT INTO bookings
                     (id, ref_code, resource, starts_at, ends_at, party_size,
                      customer_name, phone, total_price, details, status,
-                     cancelled_at, handled_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     cancelled_at, handled_at, created_at,
+                     notified_at, cancel_notified_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     uuid.uuid4().hex,
@@ -179,6 +180,10 @@ def seed(n: int, keep: bool) -> None:
                     _utc(cancelled_at) if cancelled_at else None,
                     _utc(handled_at) if handled_at else None,
                     _utc(created),
+                    # Seeded rows are born already "delivered": demo data on a
+                    # phone reads as real customers, and it is not.
+                    _utc(created),
+                    _utc(cancelled_at) if cancelled_at else None,
                 ),
             )
             made += 1
@@ -189,14 +194,15 @@ def seed(n: int, keep: bool) -> None:
             created = now - timedelta(hours=random.uniform(1, 6) if i == 0 else random.uniform(6, 96))
             handled = (now - created) > timedelta(days=1)
             conn.execute(
-                "INSERT INTO messages (id, customer_name, phone, topic, handled_at, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages (id, customer_name, phone, topic, handled_at,"
+                " created_at, notified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     uuid.uuid4().hex,
                     f"{random.choice(FIRST)} {random.choice(LAST)}",
                     _phone(),
                     topic,
                     _utc(created + timedelta(hours=random.uniform(1, 8))) if handled else None,
+                    _utc(created),
                     _utc(created),
                 ),
             )

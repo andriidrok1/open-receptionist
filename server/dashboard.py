@@ -30,6 +30,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import crm
+import notify
 from business import BUSINESS
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -37,6 +38,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 app = FastAPI(title=f"open-receptionist · {BUSINESS.key}")
+
+
+@app.on_event("startup")
+async def _start_notifier() -> None:
+    # The push loop lives in the dashboard process on purpose: it is the
+    # owner-facing component, and the call pipeline must never wait on
+    # Telegram. Without a token the feature simply does not exist.
+    if notify.TOKEN:
+        app.state.notifier = asyncio.create_task(notify.run_forever())
 STATIC = Path(__file__).parent / "static"
 # The React runtime and the dashboard app itself. Vendored, not a CDN: a
 # self-hosted install must not depend on unpkg being reachable — or on the
@@ -266,12 +276,37 @@ def api_call(request: Request, call_id: str) -> JSONResponse:
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
+def _telegram_state() -> dict:
+    """What the Settings page needs to draw the notifications card. No
+    Telegram round-trips in a request handler — the username was stored by
+    the notifier at startup."""
+    if not notify.TOKEN:
+        return {"configured": False}
+    return {
+        "configured": True,
+        "chats": len(notify.chats()),
+        "pair_code": notify.ensure_pair_code(),
+        "bot": crm.get_setting("telegram_bot_username", ""),
+    }
+
+
 @app.get("/api/settings")
 def api_settings(request: Request) -> JSONResponse:
     _require_owner(request)
     return JSONResponse(
-        {"schedule": crm.agent_schedule(), "on_duty_now": crm.agent_on_duty()}
+        {
+            "schedule": crm.agent_schedule(),
+            "on_duty_now": crm.agent_on_duty(),
+            "telegram": _telegram_state(),
+        }
     )
+
+
+@app.post("/api/telegram/unlink")
+def api_telegram_unlink(request: Request) -> JSONResponse:
+    _require_owner(request)
+    notify.unlink_all()
+    return JSONResponse({"ok": True, "telegram": _telegram_state()})
 
 
 class ScheduleBody(BaseModel):

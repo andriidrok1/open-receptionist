@@ -516,6 +516,33 @@ function Overview({ stats, biz, ui }) {
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
+function Notifications({ ui }) {
+  const [tg, setTg] = useState(null);
+  useEffect(() => {
+    get("/api/settings").then((r) => setTg(r.telegram)).catch(() => {});
+  }, []);
+  if (!tg) return null;
+
+  const unlink = async () => {
+    const r = await fetch("/api/telegram/unlink", { method: "POST" });
+    if (r.ok) setTg((await r.json()).telegram);
+  };
+
+  return html`<div className="card settings-card">
+    <div className="card-title">${ui.notifications}</div>
+    ${!tg.configured && html`<div className="hint">${ui.notif_no_token}</div>`}
+    ${tg.configured && html`
+      <div className="hint">${ui.notif_link_hint}</div>
+      <div className="savebar" style=${{ marginTop: 10 }}>
+        <a className="savebtn" style=${{ textDecoration: "none" }}
+           href=${"https://t.me/" + tg.bot + "?start=" + tg.pair_code}
+           target="_blank" rel="noreferrer">${ui.connect_telegram}</a>
+        <span className="savemsg">${(ui.notif_connected || "{n}").replace("{n}", tg.chats)}</span>
+        ${tg.chats > 0 && html`<button className="chip" onClick=${unlink}>${ui.unlink}</button>`}
+      </div>`}
+  </div>`;
+}
+
 function Settings({ biz, ui, onSaved }) {
   const [schedule, setSchedule] = useState(null);
   const [status, setStatus] = useState("");
@@ -663,7 +690,8 @@ function App() {
       ${view === "calls" && html`<${Calls} calls=${calls} ui=${ui} onOpen=${setOpenCall} />`}
       ${view === "overview" && html`<${Overview} stats=${stats} biz=${biz} ui=${ui} />`}
       ${view === "settings" && html`<${Settings} biz=${biz} ui=${ui}
-        onSaved=${() => refresh().catch(() => {})} />`}
+        onSaved=${() => refresh().catch(() => {})} />
+        <${Notifications} ui=${ui} />`}
     </main>
     <${TabBar} ui=${ui} view=${view} setView=${setView} newCount=${newCount} />
     ${openCall && html`<${Transcript} callId=${openCall} ui=${ui} onClose=${() => setOpenCall(null)} />`}

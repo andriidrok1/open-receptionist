@@ -413,7 +413,14 @@ def init_db() -> None:
         # call_id ties a record to the conversation it came out of,
         # cancelled_at is when a booking was called off — the cancellation is
         # an inbox item of its own, and it needs its own place in the feed.
-        for table, extra in (("bookings", ("cancelled_at",)), ("messages", ()), ("events", ())):
+        # notified_at / cancel_notified_at are the push-notification stamps:
+        # a cancellation is separate news from the booking it undoes, so a
+        # booking can be pushed twice — once as made, once as called off.
+        for table, extra in (
+            ("bookings", ("cancelled_at", "notified_at", "cancel_notified_at")),
+            ("messages", ("notified_at",)),
+            ("events", ()),
+        ):
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
             wanted = ("call_id",) + (("handled_at",) + extra if table != "events" else ())
             for col in wanted:
@@ -1246,6 +1253,82 @@ def inbox(limit: int = 100) -> list[dict]:
     return items[:limit]
 
 
+def pending_notifications(limit: int = 20) -> list[dict]:
+    """What the owner's phone has not been told about yet, oldest first.
+
+    Only the last two days: notifications are "at least once, eventually",
+    and the eventually has a horizon — an owner who connects Telegram on an
+    install with a month of history should not be greeted by a hundred
+    ancient bookings. Whatever falls off the horizon is still in the inbox.
+
+    Cancellation is separate news from the booking it undoes (its own stamp),
+    and an owner's own cancellation arrives pre-stamped — see cancel_booking.
+    """
+    items: list[dict] = []
+    with _connect() as conn:
+        # The horizon applies to the NEWS moment: a booking's news is its
+        # creation, a cancellation's news is the cancelling — a three-day-old
+        # booking cancelled this morning is fresh news.
+        for r in conn.execute(
+            "SELECT * FROM bookings WHERE"
+            " (status = 'active' AND notified_at IS NULL"
+            "  AND created_at > datetime('now', '-2 days'))"
+            " OR (status != 'active' AND cancel_notified_at IS NULL"
+            "     AND cancelled_at > datetime('now', '-2 days'))"
+            " ORDER BY created_at LIMIT ?",
+            (limit,),
+        ):
+            res = BOOK.resource(r["resource"])
+            cancelled = r["status"] != "active"
+            items.append(
+                {
+                    "kind": "cancellation" if cancelled else "booking",
+                    "id": r["id"],
+                    "ref_code": r["ref_code"],
+                    "customer_name": r["customer_name"],
+                    "phone": r["phone"],
+                    "resource_label": res.label if res else r["resource"],
+                    "starts_at": r["starts_at"],
+                    "ends_at": r["ends_at"],
+                    "party_size": r["party_size"],
+                    "total_price": r["total_price"],
+                    "details": json.loads(r["details"]) if r["details"] else {},
+                }
+            )
+        for r in conn.execute(
+            "SELECT * FROM messages WHERE notified_at IS NULL"
+            " AND created_at > datetime('now', '-2 days')"
+            " ORDER BY created_at LIMIT ?",
+            (limit,),
+        ):
+            items.append(
+                {
+                    "kind": "message",
+                    "id": r["id"],
+                    "customer_name": r["customer_name"],
+                    "phone": r["phone"],
+                    "topic": r["topic"],
+                }
+            )
+    return items[:limit]
+
+
+def mark_notified(kind: str, item_id: str) -> None:
+    """Stamp an item as delivered to the owner's phone. Idempotent."""
+    table, col = {
+        "booking": ("bookings", "notified_at"),
+        "cancellation": ("bookings", "cancel_notified_at"),
+        "message": ("messages", "notified_at"),
+    }.get(kind, (None, None))
+    if table is None:
+        return
+    with _connect() as conn:
+        conn.execute(
+            f"UPDATE {table} SET {col} = datetime('now') WHERE id = ?", (item_id,)
+        )
+        conn.commit()
+
+
 def get_setting(key: str, default=None):
     with _connect() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -1324,14 +1407,18 @@ def mark_handled_by_ref(ref_code: str) -> bool:
 
     Exists for the dashboard's own cancel button: cancel_booking resets
     handled_at so a CALLER's cancellation comes back into the feed as news,
-    but a cancellation the owner performed is not news to the owner.
+    but a cancellation the owner performed is not news to the owner — so it
+    is pre-checked in the feed and pre-stamped for the phone push alike.
     """
     with _connect() as conn:
         row = conn.execute(
             "SELECT id FROM bookings WHERE ref_code = ?",
             ((ref_code or "").strip().upper(),),
         ).fetchone()
-    return bool(row) and mark_handled("booking", row["id"])
+    if not row:
+        return False
+    mark_notified("cancellation", row["id"])
+    return mark_handled("booking", row["id"])
 
 
 def mark_handled(kind: str, item_id: str, handled: bool = True) -> bool:

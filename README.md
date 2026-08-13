@@ -53,6 +53,8 @@ This is honest, not modest. Here is exactly where it stands today.
   ([`server/phone_sim.py`](server/phone_sim.py)) exercises the full 8 kHz
   path — see [docs/telephony.md](docs/telephony.md)
 - An owner dashboard that is an inbox first, stats second (screenshots below)
+- Telegram push to the owner: bookings, cancellations and messages land on
+  their phone, at-least-once, with a two-minute self-hosted setup
 - Measured cost: **≈ $0.09 per spoken minute** all-in (breakdown below)
 - 410 tests, plus two conversation harnesses (scripted and an LLM playing
   difficult callers)
@@ -62,8 +64,9 @@ This is honest, not modest. Here is exactly where it stands today.
 - A full spoken call over carrier audio and the REST hang-up — the simulated
   call passes end to end; one live phone call remains to prove the last mile
 - Telnyx / Plivo share the Twilio code path and are untested on real numbers
-- Push notifications to the owner (Telegram/SMS) when the agent takes a
-  booking or a message — today the dashboard is pull, not push
+- The Telegram push has not yet been run against a live bot token — the
+  delivery, pairing and stamp semantics are covered by tests, the last-mile
+  HTTP is not
 
 **Not planned**
 
@@ -333,8 +336,8 @@ times.
 
 1. **One live carrier call** — proving the REST hang-up and narrowband audio
    on a real handset (everything up to the carrier is verified)
-2. **Push to the owner** — Telegram/SMS when a booking or message lands, with
-   the inbox's unhandled state as the trigger
+2. **One live Telegram round-trip** — the push pipeline against a real bot
+   token (the semantics are tested; the last HTTP mile is not)
 3. **Repository hygiene** — CI, contribution guide
 4. **A "today" view** — the day's jobs in arrival order, for the crew
 

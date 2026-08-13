@@ -564,12 +564,32 @@ dashboard:
   owner_answering: you answer now
   bot_paused: assistant paused
   on_duty: on duty
+  # The notifications card on the Settings tab.
+  notifications: Phone notifications
+  notif_no_token: >-
+    Not set up on this install. Whoever set the assistant up can enable it by
+    creating a Telegram bot (@BotFather) and putting TELEGRAM_BOT_TOKEN in
+    server/.env.
+  connect_telegram: Connect Telegram
+  notif_link_hint: >-
+    Anyone who opens this link and taps Start will get every new booking,
+    cancellation and message on their phone.
+  notif_connected: "Connected phones: {n}"
+  unlink: Disconnect all
   # The sign-in page.
   login_title: Owner sign-in
   password: Password
   sign_in: Sign in
   wrong_password: That password didn't match. Try again.
   sign_out: Sign out
+
+# Telegram push messages — what lands on the owner's phone.
+notify:
+  booking_title: New booking
+  cancellation_title: Booking cancelled
+  message_title: Callback request
+  connected: >-
+    ✅ Connected. New bookings and messages from {brand} will arrive here.
 
 # Invented names for demo data (seed_demo.py). An English panel full of
 # Ukrainian surnames reads as an unfinished product.
