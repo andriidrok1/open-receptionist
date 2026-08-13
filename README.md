@@ -40,9 +40,12 @@ This is honest, not modest. Here is exactly where it stands today.
 - **English.** Today the agent speaks Ukrainian. The design for the locale layer
   is done; the language is not just a setting, it is baked into the prompt, the
   tool error strings the model reads, phone formats, month names and 12h/24h time.
-- **Real phone numbers.** The Twilio / Telnyx / Plivo transports are wired up and
-  have never been tested on an actual number. Until that is done, this answers a
-  browser, not a phone.
+- **Real phone numbers.** Twilio works: a real US number was connected through
+  the standard webhook + Media Streams flow, and a wire-accurate simulator
+  (`server/phone_sim.py`) exercises the full 8 kHz telephony path — see
+  [docs/telephony.md](docs/telephony.md). Still to prove on a live line: the
+  REST hang-up and a full spoken call over carrier audio (the simulated call
+  passed end to end). Telnyx / Plivo share the code path and are untested.
 - **Cost per minute.** Not measured yet. When it is, the number and the method to
   reproduce it go here.
 
