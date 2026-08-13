@@ -23,7 +23,7 @@ providers.
 
 ```bash
 cd server
-../.venv/bin/python -m pytest tests/ -q      # 410 tests, ~8s, no network, no keys
+../.venv/bin/python -m pytest tests/ -q      # 421 tests, ~8s, no network, no keys
 BUSINESS=clinic ../.venv/bin/python bot.py   # one bot          → :7860/client
 ../.venv/bin/python run_demo.py              # all bots + showcase → :8080
 BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
@@ -47,7 +47,7 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Voice pipeline (browser) | works | live calls ending in a booking |
 | Seven businesses, two languages | works | showcase renders all correctly |
 | Language layer | works | a third language was assembled and run with zero Python changes |
-| Booking, capacity, hours, horizon | works | 410 deterministic tests |
+| Booking, capacity, hours, horizon | works | 421 deterministic tests |
 | Cancel / reschedule / find by phone | works | tests + a live English call |
 | Call transcripts + cost/latency metrics | works | live calls; stored per call |
 | Semantic end-of-turn | works, effect unproven | classifier right on 16 cases; paired A/B inconclusive |
@@ -63,6 +63,8 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Telephony (Twilio) | works up to the carrier | a real US number reached the stack; `phone_sim.py` passes the full 8 kHz path end to end; REST hang-up needs one live call |
 | Docker install | works | compose smoke-tested: both containers, shared volume |
 | Cost per minute | measured | $0.09/min avg over 12 calls / 20 min; per-call breakdown stored |
+| Telegram push to the owner | works up to Telegram's API | delivery/stamp/pairing semantics fully tested with an injected sender; one live round-trip with a real bot token still owed |
+| CI | works | ruff + the full suite on every push; first clean-machine run green (1m09s) |
 
 ---
 
@@ -71,27 +73,25 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 1. **One live carrier call still owed.** Everything up to the carrier is
    verified; the REST hang-up and narrowband audio on a real handset are not.
    The number and webhook flow are documented in docs/telephony.md.
-2. **No push to the owner.** The inbox knows what is unhandled; nothing tells
-   the owner's phone. Telegram/SMS push is the highest-value missing piece.
+2. **One live Telegram round-trip still owed.** The push pipeline is tested
+   end to end with an injected sender; the real Telegram API has not been hit
+   with a live bot token yet.
 3. **Audio recording.** Transcripts are stored now; audio is not. Legally a
    separate act (several US states need both parties' consent), and pipecat's
    AudioBufferProcessor stayed silent in-pipeline — parked rather than solved.
-4. **No CI.** The tests need neither network nor keys, so CI is an hour's
-   work. The install path has now been exercised in a clean container
-   (docker compose), but not the bare-Python path.
-5. **English voice is still Rachel**, the oldest premade ElevenLabs voice, and
+4. **English voice is still Rachel**, the oldest premade ElevenLabs voice, and
    it sounds like it. Ten candidates are synthesised and waiting to be picked
    by ear: `python voice_lab.py --lang en serve --port 8090`.
-6. **Secrets and cost are global.** One `.env` for every business, so an agency
+5. **Secrets and cost are global.** One `.env` for every business, so an agency
    cannot separate clients' keys or bills — mitigated by one-install-per-client
    (docs/install.md), unsolved for many clients on one box.
-7. **`call_tool` is synchronous** inside an async pipeline. Microseconds with
+6. **`call_tool` is synchronous** inside an async pipeline. Microseconds with
    SQLite; the first HTTP integration will stall the audio. One hour to fix.
-8. **The agent can promise an hour it never checked.** Measured: 4 calls out of
+7. **The agent can promise an hour it never checked.** Measured: 4 calls out of
    5 when the time is outside opening hours. Nothing gets double-booked — the
    store refuses — but a promise withdrawn a minute later sounds bad. Only fixed
    properly by turn state deciding which tools exist.
-9. **The caller waits ~3s**, of which ~1.1s is our timer and ~1.8s is the model
+8. **The caller waits ~3s**, of which ~1.1s is our timer and ~1.8s is the model
    writing. A speculative start (run the model at 0.4s of silence, cancel if
    they resume) is the only way meaningfully below two seconds; pipecat has the
    cancellation machinery but no ready-made version.
@@ -223,7 +223,7 @@ server/
   locales/          uk.yaml, en.yaml — the language
   businesses/       seven configs + _template.yaml — the business
   scenarios/        uk.yaml, en.yaml — test callers and eval data
-  tests/            410 deterministic tests
+  tests/            421 deterministic tests
 docs/               telephony.md, install.md, new-business.md, README.uk.md
 ```
 

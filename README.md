@@ -58,7 +58,7 @@ This is honest, not modest. Here is exactly where it stands today.
 - Telegram push to the owner: bookings, cancellations and messages land on
   their phone, at-least-once, with a two-minute self-hosted setup
 - Measured cost: **≈ $0.09 per spoken minute** all-in (breakdown below)
-- 410 tests, plus two conversation harnesses (scripted and an LLM playing
+- 420+ tests, plus two conversation harnesses (scripted and an LLM playing
   difficult callers)
 
 **In progress, and not there yet**
@@ -319,7 +319,7 @@ numbers itself it said one date and stored another.
 ## Testing
 
 ```bash
-python -m pytest server/tests   # 396 tests, no network
+python -m pytest server/tests   # the deterministic suite: no network, no keys
 python eval.py --business all   # scripted dialogues against the real model
 python simulate.py --show       # an LLM plays the caller: mumbles, changes its
                                 # mind, gives a wrong number, asks for the past
