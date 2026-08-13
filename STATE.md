@@ -6,21 +6,16 @@ what is knowingly broken, and what to work on next.
 **Keep it current.** When something here stops being true, fix the line in the
 same commit that made it untrue. A state file that lies is worse than none.
 
-Last updated: 2026-08-11 · branch `universal-receptionist`
+Last updated: 2026-08-13 · branch `universal-receptionist`
 
 ---
 
 ## What this is
 
-A self-hosted voice receptionist for small businesses, heading for open-source
-publication as a kit for people starting an AI agency. One YAML file per
-business, one per language, no per-minute platform fee between the operator and
-their providers.
-
-Strategy and milestones live in the Obsidian vault:
-`10-Products/Voice Receptionist/` — the umbrella document is
-"Open Source (план и скоуп)". Architecture criticism is in
-"Архитектура (разбор)".
+A self-hosted voice receptionist for small businesses, published as a kit for
+people selling and installing AI receptionists. One YAML file per business,
+one per language, no per-minute platform fee between the operator and their
+providers.
 
 ---
 
@@ -28,10 +23,12 @@ Strategy and milestones live in the Obsidian vault:
 
 ```bash
 cd server
-../.venv/bin/python -m pytest tests/ -q      # 136 tests, ~8s, no network, no keys
+../.venv/bin/python -m pytest tests/ -q      # 410 tests, ~8s, no network, no keys
 BUSINESS=clinic ../.venv/bin/python bot.py   # one bot          → :7860/client
-../.venv/bin/python run_demo.py              # six bots + showcase → :8080
+../.venv/bin/python run_demo.py              # all bots + showcase → :8080
 BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
+../.venv/bin/python phone_sim.py             # a Twilio-shaped caller (needs a bot
+                                             # started with -t twilio)
 
 # These cost money (OpenAI, a few cents per scenario):
 ../.venv/bin/python eval.py --business dental_us   # scripted dialogues
@@ -48,51 +45,56 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Area | State | Verified by |
 |---|---|---|
 | Voice pipeline (browser) | works | live calls ending in a booking |
-| Six businesses, two languages | works | showcase renders all six correctly |
+| Seven businesses, two languages | works | showcase renders all correctly |
 | Language layer | works | a third language was assembled and run with zero Python changes |
-| Booking, capacity, hours, horizon | works | 136 deterministic tests |
+| Booking, capacity, hours, horizon | works | 410 deterministic tests |
 | Cancel / reschedule / find by phone | works | tests + a live English call |
 | Call transcripts + cost/latency metrics | works | live calls; stored per call |
 | Semantic end-of-turn | works, effect unproven | classifier right on 16 cases; paired A/B inconclusive |
 | Alternatives on every schedule error | works | agent offers only what the tool returned |
 | Concurrency guard | works | 10 threads racing for 3 places; mutation-tested |
 | Phone numbers per country | works | UA and US, ~30 formats |
-| Owner dashboard | works, both languages | browser check, no Cyrillic on the English one |
+| Owner dashboard | works, both languages | React inbox + calls + duty schedule; auth tests, playwright screenshots |
+| Dashboard auth | works | password sessions, localhost-only fallback, rotation revokes cookies — all tested |
+| Duty schedule | works | owner picks their own hours; bot checks per call; safe-degradation tested |
 | Showcase page language picker | works | English by default, switches without a reload, choice survives F5 |
 | Dates the agent books | fixed | the prompt now lists 14 days with their weekdays; mutation-tested |
 | eval / simulate | work in both languages | dental_us 4/4, Ukrainian unchanged |
-| Telephony | **UNVERIFIED** | code wired, never tested on a real number |
+| Telephony (Twilio) | works up to the carrier | a real US number reached the stack; `phone_sim.py` passes the full 8 kHz path end to end; REST hang-up needs one live call |
+| Docker install | works | compose smoke-tested: both containers, shared volume |
+| Cost per minute | measured | $0.09/min avg over 12 calls / 20 min; per-call breakdown stored |
 
 ---
 
 ## Known gaps, in the order they hurt
 
-1. **Telephony never tested on a real number.** Blocks publication: the README
-   promises a phone. Needs a Twilio account — a human step, deliberately
-   deferred.
-2. **Audio recording.** Transcripts are stored now; audio is not. Legally a
+1. **One live carrier call still owed.** Everything up to the carrier is
+   verified; the REST hang-up and narrowband audio on a real handset are not.
+   The number and webhook flow are documented in docs/telephony.md.
+2. **No push to the owner.** The inbox knows what is unhandled; nothing tells
+   the owner's phone. Telegram/SMS push is the highest-value missing piece.
+3. **Audio recording.** Transcripts are stored now; audio is not. Legally a
    separate act (several US states need both parties' consent), and pipecat's
    AudioBufferProcessor stayed silent in-pipeline — parked rather than solved.
-3. **No CI, no clean-machine install check.** The tests need neither network nor
-   keys, so CI is an hour's work. The README's install instructions have never
-   been followed on a machine that did not already have everything.
-4. **English voice is still Rachel**, the oldest premade ElevenLabs voice, and
+4. **No CI.** The tests need neither network nor keys, so CI is an hour's
+   work. The install path has now been exercised in a clean container
+   (docker compose), but not the bare-Python path.
+5. **English voice is still Rachel**, the oldest premade ElevenLabs voice, and
    it sounds like it. Ten candidates are synthesised and waiting to be picked
    by ear: `python voice_lab.py --lang en serve --port 8090`.
-5. **Secrets and cost are global.** One `.env` for every business, so an agency
-   cannot separate clients' keys or bills.
-6. **`call_tool` is synchronous** inside an async pipeline. Microseconds with
+6. **Secrets and cost are global.** One `.env` for every business, so an agency
+   cannot separate clients' keys or bills — mitigated by one-install-per-client
+   (docs/install.md), unsolved for many clients on one box.
+7. **`call_tool` is synchronous** inside an async pipeline. Microseconds with
    SQLite; the first HTTP integration will stall the audio. One hour to fix.
-7. **The agent can promise an hour it never checked.** Measured: 4 calls out of
+8. **The agent can promise an hour it never checked.** Measured: 4 calls out of
    5 when the time is outside opening hours. Nothing gets double-booked — the
    store refuses — but a promise withdrawn a minute later sounds bad. Only fixed
    properly by turn state deciding which tools exist.
-8. **The caller waits ~3s**, of which ~1.1s is our timer and ~1.8s is the model
+9. **The caller waits ~3s**, of which ~1.1s is our timer and ~1.8s is the model
    writing. A speculative start (run the model at 0.4s of silence, cancel if
    they resume) is the only way meaningfully below two seconds; pipecat has the
    cancellation machinery but no ready-made version.
-9. **No idle handling.** If the caller goes quiet the bot waits forever. On a
-   phone line that is a dead end, and telephony is next.
 
 Deliberately **not** doing now: `Business` as an object instead of a module
 global (weeks, no user-visible change), dialogue state machine (a different
@@ -109,7 +111,7 @@ trust these: rates change and so does the machine.
 |---|---|
 | Caller waits | ~3.1s median (1.1s our turn timer, ~1.8s the model writing, 0.13s synthesis) |
 | Recognition | 0.64s, hidden under the turn timer since it runs in parallel |
-| Cost | ~$0.04/min, about 60% of it synthesis |
+| Cost | $0.09/min averaged over the whole recorded corpus (12 calls, 20 min, mixed verticals); ~80% synthesis. Short Ukrainian cleaning calls ran $0.03–0.05, English emergency/dental $0.09–0.13 |
 | Whole-reply synthesis | costs nothing measurable: 3.13s against 3.43s per sentence |
 
 Every call now stores its own numbers, so this table can be rebuilt from real
@@ -210,16 +212,19 @@ server/
   recording.py      the transcript of a call
   turn_taking.py    deciding whether the caller finished or just paused
   pricing.yaml      provider rates, with the date they were checked
-  demo.py/run_demo  showcase: six bots on 7860+, page on 8080
-  dashboard.py      owner panel
+  demo.py/run_demo  showcase: all bots on 7860+, page on 8080
+  dashboard.py      owner panel: auth + API (UI in static/, React vendored)
+  phone_sim.py      a Twilio-shaped caller over a real websocket
+  guards.py         makes the agent's worst habits unreachable (invented refs, guessed numbers)
+  hangup.py         ending the call from both sides of the silence; the claim guard runs here
   eval.py           scripted dialogues (needs a key)
   simulate.py       an LLM plays the caller (needs a key)
   voice_lab.py      voice selection lab
   locales/          uk.yaml, en.yaml — the language
-  businesses/       six configs — the business
+  businesses/       seven configs + _template.yaml — the business
   scenarios/        uk.yaml, en.yaml — test callers and eval data
-  tests/            136 deterministic tests
-docs/README.uk.md   the older, more detailed Ukrainian documentation
+  tests/            410 deterministic tests
+docs/               telephony.md, install.md, new-business.md, README.uk.md
 ```
 
 The split that matters: **language** (locales) / **business** (businesses) /
@@ -230,7 +235,6 @@ and no Python.
 
 ## Uncommitted right now
 
-The date fix, the phone-length rule, the localised showcase page with its
-language picker, `voice_lab.py` made language-agnostic, and the static-analysis
-test. Ten English voices are synthesised in `voice_lab_out/` and waiting for
-someone to listen and choose.
+Nothing — the tree is clean at every commit. Ten English voices are
+synthesised in `voice_lab_out/` (untracked) and waiting for someone to listen
+and choose.
