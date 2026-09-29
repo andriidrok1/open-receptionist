@@ -96,6 +96,8 @@ def a_call() -> list[dict]:
         ev("bot_started", 7.00, turn=2),
         ev("usage", 7.00, kind="llm", processor="llm", prompt_tokens=1000, completion_tokens=50),
         ev("usage", 7.00, kind="tts", processor="tts", characters=120),
+        ev("ttfb", 7.00, processor="OpenAILLMService#0", value=0.41),
+        ev("ttfb", 7.00, processor="ElevenLabsTTSService#0", value=0.15),
         ev("bot_stopped", 9.00, turn=2),
         # tool turn: two LLM runs around a lookup, 4 s perceived
         ev("user_stopped", 10.00, turn=3),
@@ -170,6 +172,25 @@ def test_tools_and_errors_are_counted_with_their_outcome():
     }
     assert s["errors"] == 1
     assert s["error_messages"] == ["ElevenLabsTTSService: socket closed"]
+    assert s["ttfb"]["OpenAILLMService#0"]["p50"] == 0.41
+
+
+def test_gaps_are_measured_from_the_last_silence():
+    """A caller who pauses and goes on: two silences, two transcripts. What the
+    STT took is the gap inside each pair, not the whole pause."""
+    events = [
+        ev("call_started", 0.0, business="clinic"),
+        ev("user_stopped", 1.00, turn=1),
+        ev("transcript", 1.50, turn=1, chars=10),
+        ev("user_stopped", 4.00, turn=1),
+        ev("transcript", 4.30, turn=1, chars=10),
+        ev("turn_closed", 5.10, turn=1),
+        ev("bot_started", 6.00, turn=1),
+    ]
+    t = summarize(events)["per_turn"][0]
+    assert t["stt_s"] == pytest.approx(0.3)
+    assert t["turn_timer_s"] == pytest.approx(1.1)
+    assert t["latency_s"] == pytest.approx(2.0)
 
 
 def test_cost_comes_from_the_existing_pricing_model():
@@ -200,17 +221,32 @@ def test_the_summary_line_reads_as_one_line():
 # ---------------------------------------------------------------- the observer
 
 
-def pushed(frame: Frame, t: float) -> FramePushed:
-    return FramePushed(
-        source=None, destination=None, frame=frame,
-        direction=FrameDirection.DOWNSTREAM, timestamp=int(t * 1e9),
-    )
+class Clock:
+    """The trace's clock, held by the test: each frame arrives at a chosen second."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
 
 
-def feed(observer: CallTraceObserver, script: list[tuple[float, Frame]]) -> None:
+def traced(tmp_path, call_id: str) -> tuple[CallTrace, CallTraceObserver, Clock]:
+    clock = Clock()
+    trace = CallTrace(call_id=call_id, business="clinic", logs_dir=tmp_path, clock=clock)
+    return trace, trace.observer(), clock
+
+
+def pushed(frame: Frame) -> FramePushed:
+    return FramePushed(source=None, destination=None, frame=frame,
+                       direction=FrameDirection.DOWNSTREAM, timestamp=0)
+
+
+def feed(observer: CallTraceObserver, clock: Clock, script: list[tuple[float, Frame]]) -> None:
     async def go():
         for t, frame in script:
-            await observer.on_push_frame(pushed(frame, t))
+            clock.t = t
+            await observer.on_push_frame(pushed(frame))
 
     asyncio.run(go())
 
@@ -224,12 +260,11 @@ def audio() -> TTSAudioRawFrame:
 
 
 def test_frames_become_turns(tmp_path):
-    trace = CallTrace(call_id="t1", business="clinic", logs_dir=tmp_path)
-    obs = trace.observer()
+    trace, obs, clock = traced(tmp_path, "t1")
     result = FunctionCallResultFrame(
         function_name="create_booking", tool_call_id="x", arguments={}, result={"ref_code": "A1"},
     )
-    feed(obs, [
+    feed(obs, clock, [
         # greeting
         (0.1, LLMFullResponseStartFrame()),
         (0.5, LLMTextFrame("Hello")),
@@ -286,23 +321,51 @@ def test_frames_become_turns(tmp_path):
 def test_a_broadcast_frame_is_one_moment(tmp_path):
     """Bot-started travels both ways as two frames with linked ids. Counted
     twice it would open two turns and put the latency on the wrong one."""
-    trace = CallTrace(call_id="t2", business="clinic", logs_dir=tmp_path)
-    obs = trace.observer()
+    trace, obs, clock = traced(tmp_path, "t2")
     down, up = BotStartedSpeakingFrame(), BotStartedSpeakingFrame()
     down.broadcast_sibling_id, up.broadcast_sibling_id = up.id, down.id
-    feed(obs, [(1.0, VADUserStoppedSpeakingFrame()), (2.0, down), (2.0, up)])
+    feed(obs, clock, [(1.0, VADUserStoppedSpeakingFrame()), (2.0, down), (2.0, up)])
     assert [e["event"] for e in trace.events] == ["call_started", "user_stopped", "bot_started"]
 
 
+def test_a_murmur_under_the_bots_voice_does_not_steal_its_reply(tmp_path):
+    """The VAD sits upstream of the mute, so an "uh-huh" while the bot talks
+    still produces a silence. It opens the next turn — fine, the caller's real
+    line follows — but the bot's stop must stay with the reply it ends, and
+    the next turn's wait must be measured from the caller's LAST silence."""
+    trace, obs, clock = traced(tmp_path, "t7")
+    feed(obs, clock, [
+        (1.0, VADUserStoppedSpeakingFrame()),
+        (2.0, BotStartedSpeakingFrame()),
+        (2.5, VADUserStoppedSpeakingFrame()),   # "uh-huh"
+        (4.0, BotStoppedSpeakingFrame()),
+        (5.0, VADUserStoppedSpeakingFrame()),   # the real next line
+        (5.9, UserStoppedSpeakingFrame()),
+        (6.0, LLMFullResponseStartFrame()),
+        (7.0, BotStartedSpeakingFrame()),
+        (8.0, BotStoppedSpeakingFrame()),
+    ])
+    by_turn = {}
+    for e in trace.events:
+        if "turn" in e:
+            by_turn.setdefault(e["turn"], []).append((e["event"], e["t"]))
+    assert by_turn[1] == [("user_stopped", 1.0), ("bot_started", 2.0), ("bot_stopped", 4.0)]
+    assert by_turn[2][0] == ("user_stopped", 2.5)
+    s = trace.summary()
+    assert s["turns"] == 2
+    assert s["per_turn"][0]["speaking_s"] == pytest.approx(2.0)
+    assert s["per_turn"][1]["latency_s"] == pytest.approx(2.0)   # 7.0 − 5.0
+    assert s["per_turn"][1]["speaking_s"] == pytest.approx(1.0)
+
+
 def test_tool_outcomes_are_told_apart(tmp_path):
-    trace = CallTrace(call_id="t3", business="clinic", logs_dir=tmp_path)
-    obs = trace.observer()
+    trace, obs, clock = traced(tmp_path, "t3")
 
     def result(**kw):
         return FunctionCallResultFrame(function_name="f", tool_call_id=kw.pop("id"),
                                        arguments={}, **kw)
 
-    feed(obs, [
+    feed(obs, clock, [
         (1.0, result(id="a", result={"success": True})),
         (1.1, result(id="b", result={"error": "slot taken"})),
         (1.2, result(id="c", result="boom", error="handler raised")),
@@ -312,10 +375,9 @@ def test_tool_outcomes_are_told_apart(tmp_path):
 
 
 def test_metrics_and_errors_are_recorded(tmp_path):
-    trace = CallTrace(call_id="t4", business="clinic", logs_dir=tmp_path)
-    obs = trace.observer()
+    trace, obs, clock = traced(tmp_path, "t4")
     usage = LLMTokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
-    feed(obs, [
+    feed(obs, clock, [
         (1.0, MetricsFrame(data=[
             TTFBMetricsData(processor="OpenAILLMService#0", value=0.4321),
             LLMUsageMetricsData(processor="OpenAILLMService#0", value=usage),
@@ -328,6 +390,7 @@ def test_metrics_and_errors_are_recorded(tmp_path):
     s = trace.summary()
     assert s["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "tts_characters": 77}
     assert s["errors"] == 1 and "Scribe" in s["error_messages"][0]
+    assert s["ttfb"] == {"OpenAILLMService#0": {"n": 1, "p50": 0.432, "p95": 0.432, "max": 0.432}}
 
 
 def test_finish_is_idempotent_and_closes_the_file(tmp_path):
@@ -359,9 +422,13 @@ class FakeCascade(FrameProcessor):
     them. On every final transcript it emits what the real cascade emits, with
     small real delays, so the moments have distinct timestamps."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, scale: float = 1.0, **kwargs):
         super().__init__(**kwargs)
         self._n = 0
+        self._scale = scale  # stretch the delays to look like a real call
+
+    async def _wait(self, seconds: float) -> None:
+        await asyncio.sleep(seconds * self._scale)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -370,20 +437,20 @@ class FakeCascade(FrameProcessor):
             return
         self._n += 1
         with_tool = self._n == 2
-        await asyncio.sleep(0.01)
+        await self._wait(0.01)
         await self.push_frame(UserStoppedSpeakingFrame())
         await self.push_frame(LLMFullResponseStartFrame())
-        await asyncio.sleep(0.02)
+        await self._wait(0.02)
         if with_tool:
             await self.push_frame(FunctionCallInProgressFrame(
                 function_name="check_availability", tool_call_id="tc", arguments={}))
-            await asyncio.sleep(0.01)
+            await self._wait(0.01)
             await self.push_frame(FunctionCallResultFrame(
                 function_name="check_availability", tool_call_id="tc", arguments={},
                 result={"available": True}))
             await self.push_frame(LLMFullResponseEndFrame())
             await self.push_frame(LLMFullResponseStartFrame())
-            await asyncio.sleep(0.02)
+            await self._wait(0.02)
         await self.push_frame(LLMTextFrame("Certainly."))
         await self.push_frame(MetricsFrame(data=[
             LLMUsageMetricsData(processor="llm", value=LLMTokenUsage(
@@ -391,11 +458,11 @@ class FakeCascade(FrameProcessor):
         ]))
         await self.push_frame(LLMFullResponseEndFrame())
         await self.push_frame(TTSStartedFrame())
-        await asyncio.sleep(0.01)
+        await self._wait(0.01)
         await self.push_frame(audio())
         await self.push_frame(MetricsFrame(data=[TTSUsageMetricsData(processor="tts", value=10)]))
         await self.broadcast_frame(BotStartedSpeakingFrame)
-        await asyncio.sleep(0.02)
+        await self._wait(0.02)
         await self.broadcast_frame(BotStoppedSpeakingFrame)
 
 
@@ -470,7 +537,7 @@ def test_the_report_aggregates_a_folder(tmp_path):
     text = call_report.format_report(agg, calls)
     for needed in ("calls            2 (1 completed, 1 cut)", "all turns", "with a tool call",
                    "end-of-turn timer", "check_availability", "socket closed", "of which",
-                   "  cut"):
+                   "as the service reports it", "ElevenLabsTTSService#0", "  cut"):
         assert needed in text, text
 
 

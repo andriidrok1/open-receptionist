@@ -58,7 +58,11 @@ This is honest, not modest. Here is exactly where it stands today.
 - Telegram push to the owner: bookings, cancellations and messages land on
   their phone, at-least-once, with a two-minute self-hosted setup
 - Measured cost: **≈ $0.09 per spoken minute** all-in (breakdown below)
-- 420+ tests, plus two conversation harnesses (scripted and an LLM playing
+- Every call traced per turn — where the caller's wait went (timer, STT,
+  first token, tools, TTS), what the tools did, what broke, what it cost —
+  to a JSONL file, with a report tool over a folder of them
+  ([Observability](#observability))
+- 440+ tests, plus two conversation harnesses (scripted and an LLM playing
   difficult callers)
 
 **In progress, and not there yet**
@@ -203,6 +207,7 @@ mic / phone → Silero VAD → ElevenLabs Scribe STT → OpenAI LLM → ElevenLa
 | `server/demo.py`, `run_demo.py` | the showcase page you show a business owner |
 | `server/phone_sim.py` | a caller arriving the way Twilio delivers one, without the phone bill |
 | `server/eval.py`, `server/simulate.py` | the test harnesses |
+| `server/observability.py`, `server/call_report.py` | the per-call trace and the report over it |
 
 ### Two time models cover almost every receptionist
 
@@ -331,6 +336,109 @@ python phone_sim.py             # a Twilio-shaped caller over a real websocket,
 invent data the caller never gave, promise a slot the tools never confirmed,
 claim it booked something when it didn't, or ask the same question three
 times.
+
+---
+
+## Observability
+
+Every call leaves `server/logs/calls/<call_id>.jsonl` — the same id as the
+transcript in the dashboard — one JSON row per moment of the call, written as
+it happens (a call that dies mid-way still leaves its trace):
+
+```json
+{"t": 0.001, "ts": "2026-09-29T22:10:39.433+00:00", "call_id": "demo00", "event": "user_stopped", "turn": 1}
+{"t": 0.001, "ts": "2026-09-29T22:10:39.433+00:00", "call_id": "demo00", "event": "transcript", "turn": 1, "chars": 40}
+{"t": 0.602, "ts": "2026-09-29T22:10:40.034+00:00", "call_id": "demo00", "event": "turn_closed", "turn": 1}
+{"t": 0.603, "ts": "2026-09-29T22:10:40.034+00:00", "call_id": "demo00", "event": "llm_started", "turn": 1, "run": 1}
+{"t": 1.805, "ts": "2026-09-29T22:10:41.236+00:00", "call_id": "demo00", "event": "llm_first_token", "turn": 1, "run": 1}
+{"t": 1.805, "ts": "2026-09-29T22:10:41.236+00:00", "call_id": "demo00", "event": "usage", "kind": "llm", "processor": "llm", "prompt_tokens": 500, "completion_tokens": 20}
+{"t": 1.805, "ts": "2026-09-29T22:10:41.236+00:00", "call_id": "demo00", "event": "llm_done", "turn": 1, "run": 1}
+{"t": 1.805, "ts": "2026-09-29T22:10:41.236+00:00", "call_id": "demo00", "event": "tts_started", "turn": 1}
+{"t": 2.407, "ts": "2026-09-29T22:10:41.838+00:00", "call_id": "demo00", "event": "tts_first_audio", "turn": 1}
+{"t": 2.407, "ts": "2026-09-29T22:10:41.838+00:00", "call_id": "demo00", "event": "usage", "kind": "tts", "processor": "tts", "characters": 10}
+{"t": 2.407, "ts": "2026-09-29T22:10:41.838+00:00", "call_id": "demo00", "event": "bot_started", "turn": 1}
+{"t": 3.608, "ts": "2026-09-29T22:10:43.040+00:00", "call_id": "demo00", "event": "bot_stopped", "turn": 1}
+```
+
+The rows a turn produces, in order: `user_stopped` (VAD), `transcript` (the
+STT's final text), `turn_closed` (our end-of-turn timer expired),
+`llm_started` / `llm_first_token` / `llm_done` per model run, `tool_started` /
+`tool_done` (name, duration, `ok` / `rejected` / `failed` — *rejected* is the
+tool saying no in a sentence the model reads out, which is the receptionist
+working), `tts_started` / `tts_first_audio`, `bot_started` / `bot_stopped`,
+`interrupted`. Plus `usage` (tokens, characters), `ttfb` as each service
+reports it, and `error`. The last row is `call_ended` with the call's summary.
+
+From those come the numbers per turn: **latency** = from the caller's last
+silence to the first sound of the reply, which is the one they feel, and the
+stages that explain it (they overlap on purpose — the STT runs under the
+timer — so they do not add up, and that is the point: a stage that overlaps
+costs nothing). Cost reuses [`pricing.yaml`](server/pricing.yaml) through the
+same code as the per-call metrics; without that file the usage is reported and
+the money is not guessed.
+
+When a call ends, one line lands in the main log:
+
+```
+[trace demo00] emergency_us · 32.2s · 4 turns · latency p50 2.41s p95 4.21s (stt 0.00 · llm 1.20 · tts 0.60) · 1 tool calls · 0 errors · $0.015 ($0.027/min) · logs/calls/demo00.jsonl
+```
+
+And over a folder of calls:
+
+```bash
+cd server && python call_report.py                 # logs/calls/, every call
+python call_report.py --business dental_us --last 50 --calls
+python call_report.py --json                       # the same, for machines
+```
+
+```
+calls            5 (5 completed, 0 cut)   emergency_us ×2 · dental_us ×2 · clinic ×1
+talk time        2.6 min total · 32s median per call
+turns            20 (5 with a tool call) · 0 interrupted
+
+latency (caller stops → bot speaks)         p50    p95    max     n
+  all turns                                2.41   4.21   4.21    20
+  plain                                    2.41   2.41   2.41    15
+  with a tool call                         4.21   4.21   4.21     5
+stages (seconds)                            p50    p95    max     n
+  end-of-turn timer                        0.60   0.60   0.60    20
+  stt final transcript                     0.00   0.00   0.00    20
+  llm first token                          1.20   3.00   3.01    20
+  llm total (all runs)                     1.20   3.00   3.01    20
+  tools                                    0.60   0.60   0.60     5
+  tts first audio                          0.60   0.60   0.60    20
+
+tools                             calls    ok  rejected  failed   p50 s
+  check_availability                  5     5         0       0    0.60
+
+errors           1
+  ?: connection to Scribe was closed  ×1
+
+usage            10000 in + 400 out tokens, 200 synthesised characters
+cost             0.071 USD total · 0.015 median per call · 0.027/min   (rates checked 2026-08-10)
+  of which       tts 42% · stt 24% · llm 2% · phone 31%
+
+call          business      started                    s turns    p50    p95 tools err    cost
+demo00        emergency_us  2026-09-29 22:10:39       32     4   2.41   4.21     1   0   0.015
+demo01        dental_us     2026-09-29 22:11:11       23     3   2.41   4.21     1   0   0.011
+demo02        emergency_us  2026-09-29 22:11:34       38     5   2.41   4.21     1   0   0.018
+demo03        clinic        2026-09-29 22:12:12       16     2   2.40   4.21     1   1   0.007
+demo04        dental_us     2026-09-29 22:12:28       46     6   2.41   4.21     1   0   0.021
+```
+
+Those numbers are from five synthetic calls produced by the test harness (a
+fake cascade with fixed delays, no provider behind it) — the shape is real,
+the timings are the harness's. On a live call the same rows come from the
+real STT, model and synthesiser.
+
+It hooks in as a Pipecat *observer* on the worker, not as a processor in the
+pipeline: nothing about the pipeline changes, and the observer is told about
+every frame at its first push, which is the moment closest to the event. (A
+processor only sees what reaches its position — the tail of this pipeline
+never sees a model or tool frame, the assistant aggregator consumes them.)
+`CALL_LOGS_DIR` moves the folder; a folder that cannot be written keeps the
+trace in memory and the summary line still lands in the log — tracing never
+breaks a call.
 
 ---
 

@@ -6,7 +6,7 @@ what is knowingly broken, and what to work on next.
 **Keep it current.** When something here stops being true, fix the line in the
 same commit that made it untrue. A state file that lies is worse than none.
 
-Last updated: 2026-08-13 · branch `universal-receptionist`
+Last updated: 2026-09-29 · branch `observability`
 
 ---
 
@@ -23,12 +23,14 @@ providers.
 
 ```bash
 cd server
-../.venv/bin/python -m pytest tests/ -q      # 421 tests, ~8s, no network, no keys
+../.venv/bin/python -m pytest tests/ -q      # 446 tests, ~9s, no network, no keys
 BUSINESS=clinic ../.venv/bin/python bot.py   # one bot          → :7860/client
 ../.venv/bin/python run_demo.py              # all bots + showcase → :8080
 BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 ../.venv/bin/python phone_sim.py             # a Twilio-shaped caller (needs a bot
                                              # started with -t twilio)
+../.venv/bin/python call_report.py --calls   # latency / tools / errors / cost over
+                                             # every traced call in logs/calls/
 
 # These cost money (OpenAI, a few cents per scenario):
 ../.venv/bin/python eval.py --business dental_us   # scripted dialogues
@@ -47,9 +49,10 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 | Voice pipeline (browser) | works | live calls ending in a booking |
 | Seven businesses, two languages | works | showcase renders all correctly |
 | Language layer | works | a third language was assembled and run with zero Python changes |
-| Booking, capacity, hours, horizon | works | 421 deterministic tests |
+| Booking, capacity, hours, horizon | works | 446 deterministic tests |
 | Cancel / reschedule / find by phone | works | tests + a live English call |
 | Call transcripts + cost/latency metrics | works | live calls; stored per call |
+| Per-call trace: latency by stage, tools, errors, cost → `logs/calls/*.jsonl` + `call_report.py` | works in-pipeline, not yet on a live call | 19 tests, one of which runs a real Pipecat pipeline with a fake cascade and reads the file back; the harness-generated report is in the README. A live call has not been traced yet (no keys on the machine that wrote it) |
 | Semantic end-of-turn | works, effect unproven | classifier right on 16 cases; paired A/B inconclusive |
 | Alternatives on every schedule error | works | agent offers only what the tool returned |
 | Concurrency guard | works | 10 threads racing for 3 places; mutation-tested |
@@ -94,7 +97,16 @@ BUSINESS=dental_us ../.venv/bin/python dashboard.py   # owner panel → :8000
 8. **The caller waits ~3s**, of which ~1.1s is our timer and ~1.8s is the model
    writing. A speculative start (run the model at 0.4s of silence, cancel if
    they resume) is the only way meaningfully below two seconds; pipecat has the
-   cancellation machinery but no ready-made version.
+   cancellation machinery but no ready-made version. The trace now splits
+   every turn into timer / STT / first token / tools / TTS, so the next
+   attempt is measured per stage instead of by stopwatch.
+9. **`CallMetrics` sorts every turn into the "plain" bucket on pipecat 1.12.**
+   It sits at the tail and keys the tool bucket off `FunctionCallInProgressFrame`,
+   which the assistant aggregator no longer forwards (requirements pin
+   `>=1.5`, 1.12 installs). The stored `wait_median_tool_s` is therefore
+   `None` on a fresh install. The trace does not have this problem (it is an
+   observer); either port `CallMetrics` to the same hook or read the buckets
+   from the trace.
 
 Deliberately **not** doing now: `Business` as an object instead of a module
 global (weeks, no user-visible change), dialogue state machine (a different
@@ -115,7 +127,11 @@ trust these: rates change and so does the machine.
 | Whole-reply synthesis | costs nothing measurable: 3.13s against 3.43s per sentence |
 
 Every call now stores its own numbers, so this table can be rebuilt from real
-traffic rather than from probes.
+traffic rather than from probes — and since the trace, per stage:
+`python call_report.py` prints p50 / p95 of the caller's wait split into the
+end-of-turn timer, the STT's final transcript, the model's first token and
+total, tool time and the synthesiser's first byte, over every call in
+`logs/calls/`.
 
 ---
 
@@ -154,6 +170,14 @@ Monday on a Tuesday, it answered "Monday, August fourteenth" — a Friday — an
 booked it. Nothing downstream can catch this: only the date reaches the tools,
 and it was a real, open slot. The prompt now lists fourteen days with their
 weekdays and forbids counting. Assume the same for anything else arithmetical.
+
+**A processor at the tail of the pipeline sees no LLM, tool or text frames.**
+The assistant aggregator consumes `LLMFullResponseStart/End`, `LLMTextFrame`,
+`FunctionCallInProgress/Result` and does not push them on (pipecat 1.12), and
+the TTS consumes `LLMTextFrame` before that. Anything that needs the moments of
+a turn — first token, tool duration — cannot be a processor at one position; it
+is either three processors or a `BaseObserver` on the worker, which is told
+about every frame at its first push. `observability.py` is the observer.
 
 **bot.py is the least tested file in the project and the one every call uses.**
 Building the pipeline needs a live transport, keys and a microphone, so nothing
@@ -209,6 +233,8 @@ server/
   agent_tools.py    tool schemas from the config; one execution path for all
   speech_text.py    pause markup, whole-reply aggregation
   call_metrics.py   what a call costs, in seconds and in money
+  observability.py  the per-call trace: every turn's moments → logs/calls/<id>.jsonl
+  call_report.py    a folder of traces → one table (p50/p95 by stage, tools, errors, cost)
   recording.py      the transcript of a call
   turn_taking.py    deciding whether the caller finished or just paused
   pricing.yaml      provider rates, with the date they were checked
@@ -223,7 +249,8 @@ server/
   locales/          uk.yaml, en.yaml — the language
   businesses/       seven configs + _template.yaml — the business
   scenarios/        uk.yaml, en.yaml — test callers and eval data
-  tests/            421 deterministic tests
+  logs/calls/       one JSONL per traced call (gitignored)
+  tests/            446 deterministic tests
 docs/               telephony.md, install.md, new-business.md, README.uk.md,
                     STATE.md (this file), building-on-pipecat.md
 ```

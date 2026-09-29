@@ -28,7 +28,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from observability import LOGS_DIR, STAGES, load_call, percentile
+from loguru import logger
+
+# A report is stdout for a human or JSON for a machine; pipecat's import-time
+# banner belongs to neither.
+logger.disable("pipecat")
+
+from observability import LOGS_DIR, STAGES, load_call, percentile  # noqa: E402
 
 
 def _dist(values) -> dict:
@@ -83,6 +89,12 @@ def aggregate(calls: list[dict]) -> dict:
             "priced_calls": len(priced),
         }
 
+    ttfb: dict[str, list[float]] = {}
+    for c in calls:
+        for name, d in c.get("ttfb", {}).items():
+            if d.get("p50") is not None:
+                ttfb.setdefault(name, []).append(d["p50"])
+
     return {
         "calls": len(calls),
         "completed": sum(1 for c in calls if c.get("ended") in ("ended", "cancelled")),
@@ -97,6 +109,8 @@ def aggregate(calls: list[dict]) -> dict:
         "latency_plain": _dist(t["latency_s"] for t in with_latency if t["kind"] == "plain"),
         "latency_tool": _dist(t["latency_s"] for t in with_latency if t["kind"] == "tool"),
         "stages": {key: _dist(t[key] for t in turns) for key, _ in STAGES if key != "latency_s"},
+        # per-call medians folded again: a distribution of medians, labelled so
+        "ttfb_by_service": {name: _dist(v) for name, v in sorted(ttfb.items())},
         "tool_calls": sum(a["calls"] for a in tools.values()),
         "tools": tools,
         "errors": sum(errors.values()),
@@ -145,6 +159,13 @@ def format_report(agg: dict, calls: list[dict] | None = None) -> str:
         if not d["n"]:
             continue
         lines.append(f"  {label:<38}{_s(d['p50']):>7}{_s(d['p95']):>7}{_s(d['max']):>7}{d['n']:>6}")
+    if agg["ttfb_by_service"]:
+        lines.append(f"{'time to first byte, as the service reports it':<40}"
+                     f"{'p50':>7}{'p95':>7}{'max':>7}{'calls':>6}")
+        for name, d in agg["ttfb_by_service"].items():
+            lines.append(
+                f"  {name[:38]:<38}{_s(d['p50']):>7}{_s(d['p95']):>7}{_s(d['max']):>7}{d['n']:>6}"
+            )
     lines.append("")
     if agg["tools"]:
         lines.append(f"{'tools':<32}{'calls':>7}{'ok':>6}{'rejected':>10}{'failed':>8}{'p50 s':>8}")

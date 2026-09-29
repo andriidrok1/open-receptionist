@@ -170,7 +170,9 @@ class CallTrace:
         if self.finished:
             return None
         self.finished = True
-        summary = summarize(self.events, ended=reason)
+        # The call lasts until now, not until its last event: the summary line
+        # and the file read back later must agree on the duration.
+        summary = summarize(self.events, ended=reason, ended_at=self.now())
         self.record("call_ended", reason=reason, summary=summary)
         if self._file is not None:
             try:
@@ -198,6 +200,13 @@ class CallTraceObserver(BaseObserver):
     it along, and the first push is the moment closest to the event. Frames
     the pipeline broadcasts (bot started, user stopped) exist twice, once per
     direction, and are folded back to one by their sibling id.
+
+    Time is the trace's own clock, read when the frame is pushed — an observer
+    runs inside the push, so that is the same instant. The pipeline's clock
+    would do as well, except that it starts with the pipeline, after the
+    services have connected, and the row written before that (`call_started`)
+    and the one written after (`call_ended`) would then be on a different
+    clock from everything in between.
     """
 
     def __init__(self, trace: CallTrace, **kwargs):
@@ -207,7 +216,7 @@ class CallTraceObserver(BaseObserver):
         self._open = False  # a turn exists and the bot has not finished it
         self._bot_started = False
         self._bot_stopped = False
-        self._bot_speaking = False
+        self._speaking_turn: int | None = None  # which turn the bot's voice belongs to
         self._llm_runs = 0
         self._llm_run_open = False
         self._first_token_seen = False
@@ -257,7 +266,7 @@ class CallTraceObserver(BaseObserver):
 
     async def on_push_frame(self, data: FramePushed):
         try:
-            self._observe(data.frame, data.timestamp / 1e9)
+            self._observe(data.frame, self._trace.now())
         except Exception as e:  # noqa: BLE001 — tracing must never break a call
             logger.warning(f"[trace {self._trace.call_id}] observer error: {e}")
 
@@ -277,7 +286,9 @@ class CallTraceObserver(BaseObserver):
             if not self._dedup(frame):
                 rec("turn_closed", t, turn=self._turn_for_caller_event())
         elif isinstance(frame, TranscriptionFrame):
-            if getattr(frame, "finalized", True) and (frame.text or "").strip():
+            # Final by class: interim guesses are InterimTranscriptionFrame. The
+            # `finalized` flag is not consulted — only one STT service sets it.
+            if (frame.text or "").strip():
                 rec("transcript", t, turn=self._turn_for_caller_event(), chars=len(frame.text))
         elif isinstance(frame, LLMFullResponseStartFrame):
             turn = self._turn_for_bot_event()
@@ -315,16 +326,20 @@ class CallTraceObserver(BaseObserver):
             if not self._dedup(frame):
                 turn = self._turn_for_bot_event()
                 self._bot_started = True
-                self._bot_speaking = True
+                self._speaking_turn = turn
                 rec("bot_started", t, turn=turn)
         elif isinstance(frame, BotStoppedSpeakingFrame):
-            if not self._dedup(frame) and self._open:
-                self._bot_stopped = True
-                self._bot_speaking = False
-                rec("bot_stopped", t, turn=self._turn)
+            # Attributed to the turn whose reply this was, not the current
+            # one: a caller's "uh-huh" under the bot's voice has already opened
+            # the next turn, and the reply's length must not land there.
+            if not self._dedup(frame) and self._speaking_turn is not None:
+                if self._speaking_turn == self._turn:
+                    self._bot_stopped = True
+                rec("bot_stopped", t, turn=self._speaking_turn)
+                self._speaking_turn = None
         elif isinstance(frame, InterruptionFrame):
-            if self._bot_speaking:
-                rec("interrupted", t, turn=self._turn)
+            if self._speaking_turn is not None:
+                rec("interrupted", t, turn=self._speaking_turn)
         elif isinstance(frame, MetricsFrame):
             for item in frame.data:
                 if isinstance(item, TTFBMetricsData):
@@ -408,7 +423,12 @@ class Turn:
     index: int
     user_stopped: list[float] = field(default_factory=list)
     turn_closed: float | None = None
-    transcript: float | None = None
+    #: Gaps from the last silence to the transcript / to the turn closing. A
+    #: caller who pauses and goes on produces two silences and two transcripts;
+    #: what the STT took is the gap inside each pair, not the span of the whole
+    #: pause, so each is measured against the silence just before it.
+    stt_gap: float | None = None
+    timer_gap: float | None = None
     transcript_chars: int = 0
     llm_started: list[float] = field(default_factory=list)
     llm_first_token: float | None = None
@@ -429,12 +449,14 @@ def _turns(events) -> list[Turn]:
             continue
         turn = turns.setdefault(n, Turn(n))
         kind, t = e["event"], e["t"]
+        last_stop = turn.user_stopped[-1] if turn.user_stopped else None
         if kind == "user_stopped":
             turn.user_stopped.append(t)
         elif kind == "turn_closed":
             turn.turn_closed = t
+            turn.timer_gap = _sub(t, last_stop)
         elif kind == "transcript":
-            turn.transcript = t
+            turn.stt_gap = _sub(t, last_stop)
             turn.transcript_chars += e.get("chars", 0)
         elif kind == "llm_started":
             turn.llm_started.append(t)
@@ -476,7 +498,6 @@ def turn_metrics(turn: Turn) -> dict:
     the one to attack.
     """
     anchor = turn.user_stopped[-1] if turn.user_stopped else turn.turn_closed
-    first_stop = turn.user_stopped[0] if turn.user_stopped else None
     llm_s = None
     if turn.llm_started and turn.llm_done:
         llm_s = round(sum(_sub(d, s) or 0 for s, d in zip(turn.llm_started, turn.llm_done)), 3)
@@ -487,8 +508,8 @@ def turn_metrics(turn: Turn) -> dict:
         "turn": turn.index,
         "kind": "tool" if turn.tools else "plain",
         "latency_s": _sub(turn.bot_started, anchor),
-        "turn_timer_s": _sub(turn.turn_closed, first_stop),
-        "stt_s": _sub(turn.transcript, first_stop),
+        "turn_timer_s": turn.timer_gap,
+        "stt_s": turn.stt_gap,
         "llm_ttft_s": _sub(turn.llm_first_token, turn.llm_started[0] if turn.llm_started else None),
         "llm_s": llm_s,
         "llm_runs": len(turn.llm_started),
@@ -501,7 +522,7 @@ def turn_metrics(turn: Turn) -> dict:
     }
 
 
-def summarize(events: list[dict], ended: str | None = None) -> dict:
+def summarize(events: list[dict], ended: str | None = None, ended_at: float | None = None) -> dict:
     """Everything the report needs about one call, from its events alone.
 
     Pure: the same rows in, the same numbers out, whether they come from a
@@ -510,7 +531,7 @@ def summarize(events: list[dict], ended: str | None = None) -> dict:
     pricing.yaml, and nothing here knows a price.
     """
     head = next((e for e in events if e["event"] == "call_started"), {})
-    last_t = max((e["t"] for e in events), default=0.0)
+    last_t = max(max((e["t"] for e in events), default=0.0), ended_at or 0.0)
     turns = [turn_metrics(t) for t in _turns(events)]
     answered = [t for t in turns if t["answered"]]
     with_latency = [t for t in answered if t["latency_s"] is not None]
@@ -525,6 +546,10 @@ def summarize(events: list[dict], ended: str | None = None) -> dict:
             if e.get("dur_s") is not None:
                 tool_durations[e["name"]].append(e["dur_s"])
     errors = [e for e in events if e["event"] == "error"]
+    ttfb: dict[str, list[float]] = defaultdict(list)
+    for e in events:
+        if e["event"] == "ttfb":
+            ttfb[e["processor"]].append(e["value"])
 
     totals = CallTotals()
     # CallTotals measures its own duration from a monotonic start; hand it the
@@ -552,6 +577,9 @@ def summarize(events: list[dict], ended: str | None = None) -> dict:
         "latency_plain": _dist(t["latency_s"] for t in with_latency if t["kind"] == "plain"),
         "latency_tool": _dist(t["latency_s"] for t in with_latency if t["kind"] == "tool"),
         "stages": {key: _dist(t[key] for t in turns) for key, _ in STAGES if key != "latency_s"},
+        # As the services measure themselves, request to first byte. The stage
+        # numbers above are seen from outside; these are the providers' own.
+        "ttfb": {name: _dist(v) for name, v in sorted(ttfb.items())},
         "tool_calls": sum(tools.values()),
         "tools": {
             name: {
