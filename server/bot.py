@@ -93,6 +93,7 @@ import tts_settings
 from business import BUSINESS, L, _local_phone_digits, build_system_prompt, greeting_hint
 from call_metrics import CallMetrics, format_report
 from hangup import CallEnder, ClaimGuard, GoodbyeWatch, IdleWatch, StateNudge, call_state_line
+from observability import CallTrace
 from recording import CallRecorder, TranscriptCollector
 from speech_text import SpeechTextFilter, WholeReplyAggregator
 from turn_taking import SemanticSpeechTimeoutStrategy
@@ -604,7 +605,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         pipeline_params.audio_out_sample_rate = 8000
         logger.info("Phone mode: 8 kHz")
 
-    worker = PipelineWorker(pipeline, params=pipeline_params, observers=[])
+    # The per-call trace: every turn's moments (caller stops, transcript, first
+    # token, tools, first audio) to logs/calls/<call_id>.jsonl, and one summary
+    # line when the call ends. An observer rather than a processor, so the
+    # pipeline above is untouched and every frame is seen where it is born.
+    # Same call id as the transcript, so the two can be read side by side.
+    trace = CallTrace(
+        call_id=recorder.call_id,
+        business=BUSINESS.key,
+        transport="phone" if is_phone else "browser",
+    )
+    worker = PipelineWorker(pipeline, params=pipeline_params, observers=[trace.observer()])
 
     async def greet_first() -> None:
         """The agent speaks first: a short greeting on behalf of the business."""
@@ -642,6 +653,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         # and the call's numbers were silently lost. Which is most calls —
         # people close the tab, they do not press a button.
         call_metrics.report_now()
+        trace.finish("disconnected")
         await worker.cancel()
 
     # The demo page is public and every minute of conversation costs money. The

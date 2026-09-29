@@ -234,3 +234,6 @@ server/voice_lab_state.json
 client/node_modules/
 *.db-shm
 *.db-wal
+
+# Per-call trace logs (observability.py) — data, not code
+server/logs/
